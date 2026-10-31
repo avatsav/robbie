@@ -9,6 +9,7 @@ pub(super) struct SubAgent {
     pub(super) api_key: String,
     pub(super) model: String,
     pub(super) provider: Option<String>,
+    pub(super) events: crate::events::EventSender,
 }
 
 impl SubAgent {
@@ -19,6 +20,8 @@ impl SubAgent {
             model: self.model.clone(),
             provider: self.provider.clone(),
             tools: ToolRegistry::child(),
+            events: self.events.clone(),
+            source: "subagent",
             messages: Vec::new(),
         }
     }
@@ -57,7 +60,8 @@ mod tests {
     use super::*;
 
     fn sub_agent() -> SubAgent {
-        SubAgent { client: reqwest::Client::new(), api_key: "test".into(), model: "test/model".into(), provider: None }
+        let (events, _) = tokio::sync::mpsc::unbounded_channel();
+        SubAgent { client: reqwest::Client::new(), api_key: "test".into(), model: "test/model".into(), provider: None, events }
     }
 
     #[test]
@@ -71,10 +75,30 @@ mod tests {
         assert_eq!(names, ["bash", "edit_file", "read_file", "write_file"]);
     }
 
+    #[test]
+    fn child_reports_activity_to_the_shared_channel() {
+        let mut tool = sub_agent();
+        let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        tool.events = events;
+        let child = tool.new_child();
+        child.emit(crate::events::EventKind::AssistantText("Hello".into()));
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(event.source, "subagent");
+        assert!(matches!(event.kind, crate::events::EventKind::AssistantText(text) if text == "Hello"));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn closed_frontend_does_not_panic() {
+        let child = sub_agent().new_child();
+        child.emit(crate::events::EventKind::ModelStarted);
+    }
+
     #[tokio::test]
     async fn parent_registry_exposes_and_dispatches_sub_agent() {
         let mut registry = ToolRegistry::new();
-        registry.enable_sub_agent(reqwest::Client::new(), "test".into(), "test/model".into(), None);
+        let (events, _) = tokio::sync::mpsc::unbounded_channel();
+        registry.enable_sub_agent(reqwest::Client::new(), "test".into(), "test/model".into(), None, events);
         assert!(registry.schemas().iter().any(|schema| schema["name"] == "sub_agent"));
         let (output, is_error) = registry.execute("sub_agent", &json!({})).await;
         assert!(is_error);

@@ -38,8 +38,8 @@ impl ToolRegistry {
         registry
     }
 
-    pub fn enable_sub_agent(&mut self, client: reqwest::Client, api_key: String, model: String, provider: Option<String>) {
-        self.register(Box::new(sub_agent::SubAgent { client, api_key, model, provider }));
+    pub fn enable_sub_agent(&mut self, client: reqwest::Client, api_key: String, model: String, provider: Option<String>, events: crate::events::EventSender) {
+        self.register(Box::new(sub_agent::SubAgent { client, api_key, model, provider, events }));
     }
 
     fn register(&mut self, tool: Box<dyn Tool>) {
@@ -85,7 +85,6 @@ impl Tool for Bash {
         let Some(command) = input.get("command").and_then(Value::as_str) else {
             return ("Missing or invalid command".to_string(), true);
         };
-        println!("$ {command}");
         let mut process = Command::new("sh");
         process.arg("-c").arg(command).kill_on_drop(true);
         match tokio::time::timeout(Duration::from_secs(120), process.output()).await {

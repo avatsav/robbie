@@ -79,12 +79,17 @@ fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
     }
 }
 
-fn execute(name: &str, input: &Value) -> (String, bool) {
-    let result = std::env::current_dir().context("cannot find workspace")
-        .and_then(|root| run_file_tool(name, input, &root));
+async fn execute(name: &'static str, input: &Value) -> (String, bool) {
+    // The blocking task owns its input: it can outlive the async caller on exit.
+    let input = input.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let root = std::env::current_dir().context("cannot find workspace")?;
+        run_file_tool(name, &input, &root)
+    }).await;
     match result {
-        Ok(output) => (output, false),
-        Err(error) => (format!("Error: {error:#}"), true),
+        Ok(Ok(output)) => (output, false),
+        Ok(Err(error)) => (format!("Error: {error:#}"), true),
+        Err(error) => (format!("File task failed: {error}"), true),
     }
 }
 
@@ -97,7 +102,7 @@ impl Tool for ReadFile {
             "path": {"type": "string"}, "limit": {"type": "integer", "minimum": 0}
         }, "required": ["path"] }
     }) }
-    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input) }
+    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input).await }
 }
 
 #[async_trait]
@@ -109,7 +114,7 @@ impl Tool for WriteFile {
             "path": {"type": "string"}, "content": {"type": "string"}
         }, "required": ["path", "content"] }
     }) }
-    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input) }
+    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input).await }
 }
 
 #[async_trait]
@@ -121,12 +126,42 @@ impl Tool for EditFile {
             "path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}
         }, "required": ["path", "old_text", "new_text"] }
     }) }
-    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input) }
+    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input).await }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_file_read_does_not_block_the_executor() {
+        use std::time::{Duration, Instant};
+        let root = std::env::current_dir().unwrap().join(format!(".robbie-fifo-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fifo = root.join("pipe");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        // An OS thread guarantees the old blocking implementation eventually
+        // unblocks too, so a failure cannot hang the test runtime.
+        let writer_path = fifo.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(700));
+            std::fs::write(writer_path, "released").unwrap();
+        });
+        let input = json!({"path": fifo});
+        let mut tool = ReadFile;
+        let start = Instant::now();
+        let heartbeat = async {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            start.elapsed()
+        };
+        let ((output, is_error), latency) = tokio::join!(tool.execute(&input), heartbeat);
+        writer.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(output, "released");
+        assert!(!is_error);
+        assert!(latency < Duration::from_millis(350), "executor stalled for {latency:?}");
+    }
 
     #[test]
     fn file_tools_create_read_and_edit() {
