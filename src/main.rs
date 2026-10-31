@@ -1,9 +1,10 @@
 use std::io::{self, Write};
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use tokio::process::Command;
+
+mod tools;
+use tools::ToolRegistry;
 
 const SYSTEM: &str = "You are a coding agent. Use bash to inspect and change the workspace. Act first, then report clearly.";
 
@@ -12,7 +13,11 @@ struct Agent {
     api_key: String,
     model: String,
     provider: Option<String>,
+    tools: ToolRegistry,
     // Keep complete assistant content blocks, including tool-use IDs, for the next request.
+    // TODO: When adding conversation persistence or recovery, repair incomplete tool
+    // exchanges before resuming. A missing result may mean the tool's outcome is
+    // unknown, not that it was cancelled; do not blindly retry side effects.
     messages: Vec<Value>,
 }
 
@@ -26,15 +31,7 @@ impl Agent {
                     "max_tokens": 8000,
                     "system": SYSTEM,
                     "messages": self.messages,
-                    "tools": [{
-                        "name": "bash",
-                        "description": "Run a shell command in the current workspace.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": { "command": { "type": "string" } },
-                            "required": ["command"]
-                        }
-                    }]
+                    "tools": self.tools.schemas()
                 });
             if let Some(provider) = &self.provider {
                 request["provider"] = json!({ "only": [provider] });
@@ -62,13 +59,8 @@ impl Agent {
                     }
                     Some("tool_use") => {
                         let id = block["id"].as_str().context("tool use has no ID")?;
-                        let (output, is_error) = match (block["name"].as_str(), block["input"]["command"].as_str()) {
-                            (Some("bash"), Some(command)) => {
-                                println!("$ {command}");
-                                run_bash(command).await
-                            }
-                            _ => ("Unknown tool or invalid command".to_string(), true),
-                        };
+                        let name = block["name"].as_str().unwrap_or("");
+                        let (output, is_error) = self.tools.execute(name, &block["input"]).await;
                         println!("{output}");
                         results.push(json!({"type": "tool_result", "tool_use_id": id, "content": output, "is_error": is_error}));
                     }
@@ -85,22 +77,6 @@ impl Agent {
     }
 }
 
-async fn run_bash(command: &str) -> (String, bool) {
-    let mut process = Command::new("sh");
-    process.arg("-c").arg(command).kill_on_drop(true);
-    match tokio::time::timeout(Duration::from_secs(120), process.output()).await {
-        Ok(Ok(output)) => {
-            let combined = [output.stdout, output.stderr].concat();
-            let text = String::from_utf8_lossy(&combined);
-            let text = text.trim();
-            let result = if text.is_empty() { "(no output)".to_string() } else { text.chars().take(50_000).collect() };
-            (format!("{result}\n(exit status: {})", output.status), !output.status.success())
-        }
-        Ok(Err(error)) => (format!("Could not run command: {error}"), true),
-        Err(_) => ("Command timed out after 120 seconds".to_string(), true),
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
@@ -111,6 +87,7 @@ async fn main() -> Result<()> {
         provider: std::env::var("OPENROUTER_PROVIDER").ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
+        tools: ToolRegistry::new(),
         messages: Vec::new(),
     };
 
@@ -127,18 +104,4 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn shell_returns_output_and_exit_status() {
-        let (output, error) = run_bash("printf hello").await;
-        assert!(output.contains("hello"));
-        assert!(!error);
-        let (_, error) = run_bash("exit 1").await;
-        assert!(error);
-    }
 }
