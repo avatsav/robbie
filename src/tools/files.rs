@@ -97,7 +97,7 @@ impl Tool for ReadFile {
             "path": {"type": "string"}, "limit": {"type": "integer", "minimum": 0}
         }, "required": ["path"] }
     }) }
-    async fn execute(&self, input: &Value) -> (String, bool) { execute(self.name(), input) }
+    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input) }
 }
 
 #[async_trait]
@@ -109,7 +109,7 @@ impl Tool for WriteFile {
             "path": {"type": "string"}, "content": {"type": "string"}
         }, "required": ["path", "content"] }
     }) }
-    async fn execute(&self, input: &Value) -> (String, bool) { execute(self.name(), input) }
+    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input) }
 }
 
 #[async_trait]
@@ -121,7 +121,7 @@ impl Tool for EditFile {
             "path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}
         }, "required": ["path", "old_text", "new_text"] }
     }) }
-    async fn execute(&self, input: &Value) -> (String, bool) { execute(self.name(), input) }
+    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input) }
 }
 
 #[cfg(test)]

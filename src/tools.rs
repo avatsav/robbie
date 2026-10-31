@@ -6,13 +6,14 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 
 mod files;
+mod todo;
 
 // Each tool supplies both its model-facing schema and its local behavior.
 #[async_trait]
 trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn schema(&self) -> Value;
-    async fn execute(&self, input: &Value) -> (String, bool);
+    async fn execute(&mut self, input: &Value) -> (String, bool);
 }
 
 pub struct ToolRegistry {
@@ -26,6 +27,7 @@ impl ToolRegistry {
         registry.register(Box::new(files::ReadFile));
         registry.register(Box::new(files::WriteFile));
         registry.register(Box::new(files::EditFile));
+        registry.register(Box::new(todo::TodoTool::default()));
         registry
     }
 
@@ -40,8 +42,8 @@ impl ToolRegistry {
         tools.iter().map(|tool| tool.schema()).collect()
     }
 
-    pub async fn execute(&self, name: &str, input: &Value) -> (String, bool) {
-        match self.tools.get(name) {
+    pub async fn execute(&mut self, name: &str, input: &Value) -> (String, bool) {
+        match self.tools.get_mut(name) {
             Some(tool) => tool.execute(input).await,
             None => (format!("Unknown tool: {name}"), true),
         }
@@ -68,7 +70,7 @@ impl Tool for Bash {
         })
     }
 
-    async fn execute(&self, input: &Value) -> (String, bool) {
+    async fn execute(&mut self, input: &Value) -> (String, bool) {
         let Some(command) = input.get("command").and_then(Value::as_str) else {
             return ("Missing or invalid command".to_string(), true);
         };
@@ -95,7 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn registry_exposes_and_dispatches_bash() {
-        let registry = ToolRegistry::new();
+        let mut registry = ToolRegistry::new();
         assert_eq!(registry.schemas()[0]["name"], "bash");
         let (output, error) = registry.execute("bash", &json!({"command": "printf hello"})).await;
         assert!(output.contains("hello"));
@@ -104,9 +106,29 @@ mod tests {
         assert!(error);
     }
 
+    struct Counter(usize);
+
+    #[async_trait]
+    impl Tool for Counter {
+        fn name(&self) -> &'static str { "counter" }
+        fn schema(&self) -> Value { json!({"name": self.name()}) }
+        async fn execute(&mut self, _input: &Value) -> (String, bool) {
+            self.0 += 1;
+            (self.0.to_string(), false)
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_keeps_tool_state_between_calls() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(Counter(0)));
+        assert_eq!(registry.execute("counter", &json!({})).await.0, "1");
+        assert_eq!(registry.execute("counter", &json!({})).await.0, "2");
+    }
+
     #[tokio::test]
     async fn registry_reports_unknown_tools_and_invalid_inputs() {
-        let registry = ToolRegistry::new();
+        let mut registry = ToolRegistry::new();
         let (output, error) = registry.execute("missing", &json!({})).await;
         assert!(error);
         assert!(output.contains("Unknown tool"));
