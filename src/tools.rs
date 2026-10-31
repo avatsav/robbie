@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 
 mod files;
+mod sub_agent;
 mod todo;
 
 // Each tool supplies both its model-facing schema and its local behavior.
@@ -22,13 +23,23 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
+        let mut registry = Self::child();
+        registry.register(Box::new(todo::TodoTool::default()));
+        registry
+    }
+
+    // Children can use workspace tools, but cannot delegate recursively.
+    fn child() -> Self {
         let mut registry = Self { tools: HashMap::new() };
         registry.register(Box::new(Bash));
         registry.register(Box::new(files::ReadFile));
         registry.register(Box::new(files::WriteFile));
         registry.register(Box::new(files::EditFile));
-        registry.register(Box::new(todo::TodoTool::default()));
         registry
+    }
+
+    pub fn enable_sub_agent(&mut self, client: reqwest::Client, api_key: String, model: String, provider: Option<String>) {
+        self.register(Box::new(sub_agent::SubAgent { client, api_key, model, provider }));
     }
 
     fn register(&mut self, tool: Box<dyn Tool>) {

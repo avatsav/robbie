@@ -22,7 +22,7 @@ struct Agent {
 }
 
 impl Agent {
-    async fn run(&mut self, prompt: &str) -> Result<()> {
+    async fn run(&mut self, prompt: &str) -> Result<String> {
         self.messages.push(json!({"role": "user", "content": prompt}));
 
         loop {
@@ -68,13 +68,21 @@ impl Agent {
                 }
             }
             if results.is_empty() {
-                break;
+                return Ok(response_text(blocks));
             }
             // Tool results are user messages in the Anthropic messages protocol.
             self.messages.push(json!({"role": "user", "content": results}));
         }
-        Ok(())
     }
+}
+
+// Only the final model response is returned, not intermediate tool-use text.
+fn response_text(blocks: &[Value]) -> String {
+    blocks.iter()
+        .filter(|block| block["type"].as_str() == Some("text"))
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[tokio::main]
@@ -90,6 +98,9 @@ async fn main() -> Result<()> {
         tools: ToolRegistry::new(),
         messages: Vec::new(),
     };
+    agent.tools.enable_sub_agent(
+        agent.client.clone(), agent.api_key.clone(), agent.model.clone(), agent.provider.clone(),
+    );
 
     println!("Warning: the agent can run shell commands without asking. Use only in a trusted environment. Type exit() to quit.");
     loop {
@@ -104,4 +115,20 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_text_keeps_only_text_blocks_in_order() {
+        let blocks = vec![
+            json!({"type": "text", "text": "First"}),
+            json!({"type": "tool_use", "id": "call", "name": "bash"}),
+            json!({"type": "text", "text": "Second"}),
+        ];
+        assert_eq!(response_text(&blocks), "First\nSecond");
+        assert_eq!(response_text(&[]), "");
+    }
 }
