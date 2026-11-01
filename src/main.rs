@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 mod events;
+mod fullscreen;
 mod tools;
 mod ui;
 use events::{AgentEvent, EventKind, EventSender};
@@ -97,6 +98,23 @@ fn response_text(blocks: &[Value]) -> String {
         .join("\n")
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Frontend {
+    Fullscreen,
+    Inline,
+    Console,
+}
+
+fn select_frontend(args: &[String]) -> Frontend {
+    if args.iter().any(|arg| arg == "--console") {
+        Frontend::Console
+    } else if args.iter().any(|arg| arg == "--inline") {
+        Frontend::Inline
+    } else {
+        Frontend::Fullscreen
+    }
+}
+
 fn main() -> Result<()> {
     run_with_runtime(run())
 }
@@ -129,8 +147,10 @@ async fn run() -> Result<()> {
         agent.client.clone(), agent.api_key.clone(), agent.model.clone(), agent.provider.clone(), agent.events.clone(),
     );
 
-    if !std::env::args().any(|arg| arg == "--console") {
-        return ui::run(agent, receiver).await;
+    match select_frontend(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        Frontend::Fullscreen => return fullscreen::run(agent, receiver).await,
+        Frontend::Inline => return ui::run(agent, receiver).await,
+        Frontend::Console => {}
     }
 
     println!("Warning: the agent can run shell commands without asking. Use only in a trusted environment. Type exit() to quit.");
@@ -172,6 +192,15 @@ async fn run_console(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_is_default_with_inline_and_console_opt_ins() {
+        let choose = |args: &[&str]| select_frontend(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
+        assert_eq!(choose(&[]), Frontend::Fullscreen);
+        assert_eq!(choose(&["--fullscreen"]), Frontend::Fullscreen);
+        assert_eq!(choose(&["--inline"]), Frontend::Inline);
+        assert_eq!(choose(&["--console"]), Frontend::Console);
+    }
 
     #[test]
     fn shutdown_does_not_wait_forever_for_blocking_work() {

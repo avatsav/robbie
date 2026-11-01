@@ -92,8 +92,19 @@ impl Tool for Bash {
                 let combined = [output.stdout, output.stderr].concat();
                 let text = String::from_utf8_lossy(&combined);
                 let text = text.trim();
-                let result = if text.is_empty() { "(no output)".to_string() } else { text.chars().take(50_000).collect() };
-                (format!("{result}\n(exit status: {})", output.status), !output.status.success())
+                // Keep the end of long command output: failures and summaries
+                // usually live there, and the UI previews this same tail.
+                let mut tail: Vec<_> = text.chars().rev().take(50_001).collect();
+                let truncated = tail.len() > 50_000;
+                tail.truncate(50_000);
+                let result: String = tail.into_iter().rev().collect();
+                let result = if result.is_empty() { "(no output)".to_string() } else { result };
+                let result = if truncated { format!("[earlier output truncated]\n{result}") } else { result };
+                let status = match output.status.code() {
+                    Some(code) => format!("[exit {code}]"),
+                    None => format!("[{}]", output.status),
+                };
+                (format!("{result}\n{status}"), !output.status.success())
             }
             Ok(Err(error)) => (format!("Could not run command: {error}"), true),
             Err(_) => ("Command timed out after 120 seconds".to_string(), true),
@@ -114,6 +125,21 @@ mod tests {
         assert!(!error);
         let (_, error) = registry.execute("bash", &json!({"command": "exit 1"})).await;
         assert!(error);
+    }
+
+    #[tokio::test]
+    async fn bash_returns_the_output_tail_and_numeric_exit_code() {
+        let mut registry = ToolRegistry::new();
+        let (output, is_error) = registry.execute("bash", &json!({
+            "command": "printf START; awk 'BEGIN { for (i = 0; i < 51000; i++) printf \"x\" }'; printf '\\nTAIL\\n'; exit 7"
+        })).await;
+        assert!(is_error);
+        assert!(output.starts_with("[earlier output truncated]"));
+        assert!(!output.contains("START"));
+        assert!(output.ends_with("TAIL\n[exit 7]"));
+        let (output, is_error) = registry.execute("bash", &json!({"command":"printf hello"})).await;
+        assert!(!is_error);
+        assert_eq!(output, "hello\n[exit 0]");
     }
 
     struct Counter(usize);
