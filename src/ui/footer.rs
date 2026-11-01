@@ -7,7 +7,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{App, MUTED_CYAN, MUTED_RED, MUTED_TEXT, single_line, workspace::Workspace};
+use super::{App, MUTED_CYAN, MUTED_RED, MUTED_TEXT, mascot, single_line, workspace::Workspace};
 
 const IDLE_RULE: Color = Color::Rgb(166, 118, 165);
 const MAX_INPUT_ROWS: usize = 4;
@@ -17,11 +17,39 @@ impl App {
         self.workspace = workspace;
     }
 
-    pub(crate) fn live_height(&self, width: u16) -> u16 {
-        draft_rows(&self.input, width as usize)
+    pub(crate) fn configure_mascot_graphics(&mut self) {
+        self.mascot.detect_graphics();
+    }
+
+    fn mascot_input_layout(&self, width: u16) -> (u16, u16) {
+        let size = self.mascot.size();
+        let overlap = self.mascot.top_rule_overlap();
+        let draft_width = width.saturating_sub(size.width + mascot::GUTTER);
+        let minimum_rows = size.height.saturating_sub(overlap * 2);
+        let input_height = (draft_rows(&self.input, draft_width as usize)
             .len()
-            .min(MAX_INPUT_ROWS) as u16
-            + 4
+            .min(MAX_INPUT_ROWS) as u16)
+            .max(minimum_rows);
+        // Images can protrude above the top rule; tiles stay fully inside the
+        // typing area. Neither renderer covers the bottom rule or transcript.
+        let headroom = overlap * size.height.saturating_sub(input_height + overlap);
+        (input_height, headroom)
+    }
+
+    pub(crate) fn live_height(&self, width: u16, terminal_height: u16) -> u16 {
+        let (input_height, headroom) = self.mascot_input_layout(width);
+        // Keep at least four transcript rows rather than squeezing in a mascot.
+        if self.mascot.is_visible()
+            && width >= mascot::MIN_PANEL_WIDTH
+            && terminal_height >= input_height + headroom + 8
+        {
+            input_height + headroom + 4
+        } else {
+            draft_rows(&self.input, width as usize)
+                .len()
+                .min(MAX_INPUT_ROWS) as u16
+                + 4
+        }
     }
 
     fn activity_title(&self) -> (String, bool) {
@@ -44,21 +72,33 @@ impl App {
         } else {
             IDLE_RULE
         };
-        let (input_y, input_height, footer_y) = if area.height >= 3 {
+        let (input_y, input_height, headroom, footer_y) = if area.height >= 3 {
             let metadata = if area.height >= 5 { 2 } else { 0 };
-            let input_height = area.height - metadata - 2;
+            let available = area.height - metadata - 2;
+            let (_, requested_headroom) = self.mascot_input_layout(area.width);
+            let headroom = if self.mascot.is_visible()
+                && area.width >= mascot::MIN_PANEL_WIDTH
+                && frame.area().height >= area.height + 4
+            {
+                requested_headroom.min(available.saturating_sub(1))
+            } else {
+                0
+            };
+            let input_height = available - headroom;
+            let top = area.y + headroom;
             frame.render_widget(
                 rule(&title, area.width, color),
-                Rect::new(area.x, area.y, area.width, 1),
+                Rect::new(area.x, top, area.width, 1),
             );
-            let bottom = area.y + input_height + 1;
+            let bottom = top + input_height + 1;
             frame.render_widget(
                 rule("", area.width, color),
                 Rect::new(area.x, bottom, area.width, 1),
             );
             (
-                area.y + 1,
+                top + 1,
                 input_height,
+                headroom,
                 (metadata > 0).then_some(bottom + 1),
             )
         } else {
@@ -68,19 +108,43 @@ impl App {
                     Rect::new(area.x, area.y, area.width, 1),
                 );
             }
-            (area.bottom() - 1, 1, None)
+            (area.bottom() - 1, 1, 0, None)
         };
-        let rows = draft_rows(&self.input, area.width as usize);
+        let size = self.mascot.size();
+        // Only images may occupy the top rule's row; tiles stay inset.
+        let top_overlap = if area.height >= 3 {
+            self.mascot.top_rule_overlap()
+        } else {
+            0
+        };
+        let widget = self.mascot.widget().filter(|_| {
+            area.width >= mascot::MIN_PANEL_WIDTH
+                && frame.area().height >= input_height + headroom + 8
+                && input_height + headroom + top_overlap >= size.height
+        });
+        let input_width = if let Some(widget) = widget {
+            let mascot_area = Rect::new(
+                area.right() - size.width,
+                input_y + input_height - size.height,
+                size.width,
+                size.height,
+            );
+            frame.render_widget(widget, mascot_area);
+            area.width - size.width - mascot::GUTTER
+        } else {
+            area.width
+        };
+        let rows = draft_rows(&self.input, input_width as usize);
         let visible = &rows[rows.len().saturating_sub(input_height as usize)..];
         for (offset, text) in visible.iter().enumerate() {
             frame.render_widget(
                 Line::from(text.as_str()),
-                Rect::new(area.x, input_y + offset as u16, area.width, 1),
+                Rect::new(area.x, input_y + offset as u16, input_width, 1),
             );
         }
         let cursor_column = visible.last().map(|row| row.width()).unwrap_or(0) as u16;
         frame.set_cursor_position((
-            area.x + cursor_column.min(area.width - 1),
+            area.x + cursor_column.min(input_width - 1),
             input_y + visible.len().saturating_sub(1) as u16,
         ));
         if let Some(y) = footer_y {
@@ -127,7 +191,7 @@ fn rule(title: &str, width: u16, color: Color) -> Line<'static> {
 
 // Preserve the draft verbatim, wrapping by cells without splitting graphemes.
 // A full final row gets a new empty row so the cursor always has a real cell.
-fn draft_rows(input: &str, width: usize) -> Vec<String> {
+pub(super) fn draft_rows(input: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
     }
@@ -304,7 +368,7 @@ mod tests {
             input: "猫 abc e\u{301} ".repeat(100),
             ..App::default()
         };
-        assert_eq!(app.live_height(20), 8);
+        assert_eq!(app.live_height(20, 24), 8);
         for width in [0, 1, 2, 10, 80] {
             for height in [0, 1, 2, 3, 4, 5, 8] {
                 let mut terminal = Terminal::new(TestBackend::new(width + 4, height + 4)).unwrap();

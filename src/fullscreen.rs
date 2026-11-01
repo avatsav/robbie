@@ -2,6 +2,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 use crossterm::{
+    SynchronizedUpdate,
     clipboard::CopyToClipboard,
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -63,7 +64,10 @@ impl App {
     fn view(&mut self, frame: &mut Frame) {
         let [history, live] = Layout::vertical([
             Constraint::Min(0),
-            Constraint::Length(self.content.live_height(frame.area().width)),
+            Constraint::Length(
+                self.content
+                    .live_height(frame.area().width, frame.area().height),
+            ),
         ])
         .areas(frame.area());
         let rows = self.rows(history.width as usize);
@@ -230,19 +234,13 @@ async fn run_app(
     receiver: &mut UnboundedReceiver<AgentEvent>,
 ) -> Result<()> {
     let mut app = App::new(&agent.model);
+    // Capability probing owns stdin briefly, before EventStream starts reading.
+    app.content.configure_mascot_graphics();
     let mut workspace = ui::WorkspaceMonitor::start();
     workspace.apply_current(&mut app.content);
     let mut keys = EventStream::new();
     loop {
-        terminal.draw(|frame| app.view(frame))?;
-        let event = tokio::select! {
-            event = keys.next() => event.context("terminal input closed")??,
-            Some(snapshot) = workspace.changed() => {
-                app.content.set_workspace(snapshot);
-                continue;
-            }
-        };
-        match app.handle_terminal_event(event)? {
+        match wait_for_input(terminal, &mut app, &mut keys, &mut workspace).await? {
             InputAction::Quit => return Ok(()),
             InputAction::None => continue,
             InputAction::Submit => {}
@@ -265,6 +263,39 @@ async fn run_app(
     }
 }
 
+// Present text, first-use image uploads, and image placements together rather
+// than letting the terminal paint an intermediate, partially updated screen.
+fn draw(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    std::io::stdout().sync_update(|_| terminal.draw(|frame| app.view(frame)).map(|_| ()))??;
+    Ok(())
+}
+
+// Shared by the application and its PTY fixture: idle/completion animations
+// need redraws too, without blocking input, scrolling, or workspace updates.
+async fn wait_for_input(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    keys: &mut EventStream,
+    workspace: &mut ui::WorkspaceMonitor,
+) -> Result<InputAction> {
+    let mut ticks = tokio::time::interval(ui::ANIMATION_TICK);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        draw(terminal, app)?;
+        tokio::select! {
+            event = keys.next() => {
+                let event = event.context("terminal input closed")??;
+                match app.handle_terminal_event(event)? {
+                    InputAction::None => {}
+                    action => return Ok(action),
+                }
+            }
+            _ = ticks.tick() => app.content.advance_tick(),
+            Some(snapshot) = workspace.changed() => app.content.set_workspace(snapshot),
+        }
+    }
+}
+
 enum TurnOutcome {
     Finished(Result<String>),
     Quit,
@@ -281,9 +312,10 @@ async fn run_turn(
     run: impl std::future::Future<Output = Result<String>>,
 ) -> Result<TurnOutcome> {
     tokio::pin!(run);
-    let mut ticks = tokio::time::interval(std::time::Duration::from_millis(100));
+    let mut ticks = tokio::time::interval(ui::ANIMATION_TICK);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        terminal.draw(|frame| app.view(frame))?;
+        draw(terminal, app)?;
         tokio::select! {
             result = &mut run => {
                 while let Ok(event) = receiver.try_recv() { app.activity(event); }
@@ -362,11 +394,7 @@ mod tests {
                     TurnOutcome::Finished(result) => app.content.finish_turn(result),
                     TurnOutcome::Quit => anyhow::bail!("quit before response"),
                 }
-                loop {
-                    terminal.draw(|frame| app.view(frame))?;
-                    let event = keys.next().await.context("terminal input closed")??;
-                    if app.handle_terminal_event(event)? == InputAction::Quit { break }
-                }
+                while wait_for_input(&mut terminal, &mut app, &mut keys, &mut workspace).await? != InputAction::Quit {}
                 Ok(())
             }.await;
             ratatui::restore();
@@ -796,7 +824,14 @@ mod tests {
                 .iter()
                 .any(|cell| cell.modifier.contains(Modifier::DIM))
         );
-        assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
+        // Transcript styling is unchanged; the mascot has dark eye backgrounds.
+        assert!(
+            buffer
+                .content
+                .iter()
+                .take(100 * app.history_area.height as usize)
+                .all(|cell| cell.bg == Color::Reset)
+        );
         Ok(())
     }
 

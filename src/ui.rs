@@ -17,9 +17,11 @@ use crate::{
 };
 
 mod footer;
+mod mascot;
 mod tool_display;
 mod workspace;
 
+pub(super) use mascot::TICK as ANIMATION_TICK;
 pub(super) use workspace::WorkspaceMonitor;
 
 type StyledLine = (String, Style);
@@ -130,6 +132,7 @@ pub(super) struct App {
     model: String,
     workspace: workspace::Workspace,
     tick: usize,
+    mascot: mascot::Mascot,
     failed: bool,
     // A child can run tools while the parent's sub_agent call is still active.
     active_tools: HashMap<&'static str, ToolActivity>,
@@ -146,6 +149,7 @@ impl App {
 
     pub(super) fn advance_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        self.mascot.advance();
     }
 
     pub(super) fn banner(&mut self, model: &str) {
@@ -177,12 +181,18 @@ impl App {
         });
         self.blank();
         self.working = true;
+        self.mascot.set_activity(mascot::Activity::Thinking);
         prompt
     }
 
     pub(super) fn finish_turn(&mut self, result: Result<String>) {
         self.working = false;
         self.active_tools.clear();
+        self.mascot.set_activity(if result.is_ok() {
+            mascot::Activity::Success
+        } else {
+            mascot::Activity::Error
+        });
         if let Err(error) = result {
             self.push(format!("[error] {error:#}"), Style::new().red());
             self.blank();
@@ -298,6 +308,15 @@ impl App {
                 }
             }
         }
+        self.sync_mascot_activity();
+    }
+
+    fn sync_mascot_activity(&mut self) {
+        self.mascot.set_activity(if self.active_tools.is_empty() {
+            mascot::Activity::Thinking
+        } else {
+            mascot::Activity::Working
+        });
     }
 
     pub(super) fn handle_event(&mut self, event: Event) -> InputAction {
@@ -318,6 +337,10 @@ impl App {
                 KeyCode::Char('d') if self.input.is_empty() => InputAction::Quit,
                 KeyCode::Char('o') => {
                     self.output_mode = self.output_mode.next();
+                    InputAction::None
+                }
+                KeyCode::Char('g') => {
+                    self.mascot.toggle_visibility();
                     InputAction::None
                 }
                 _ => InputAction::None,
