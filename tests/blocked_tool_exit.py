@@ -92,7 +92,7 @@ def check_screen(completed_read=False):
             if completed_read:
                 for marker in (b"1", b"2", b"3"):
                     type_and_wait(b"\x0f" + marker, marker)  # Ctrl+O cycles silently.
-                assert b"Ctrl+O: concise" in output
+                assert b"Ctrl+O" not in output, "Mode hint should stay hidden"
                 assert b"[dependencies]" not in output, "Mode change replayed tool output"
 
             # Reach the start regardless of footer height or terminal wrapping.

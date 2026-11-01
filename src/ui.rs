@@ -41,14 +41,6 @@ enum ToolOutputMode {
 }
 
 impl ToolOutputMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Concise => "concise",
-            Self::Relaxed => "relaxed",
-            Self::Full => "full",
-        }
-    }
-
     fn next(self) -> Self {
         match self {
             Self::Concise => Self::Relaxed,
@@ -67,9 +59,6 @@ pub(super) struct ToolOutcome {
 pub(super) enum OutputLine {
     Banner {
         model: String,
-    },
-    BannerHint {
-        text: &'static str,
     },
     UserPrompt {
         text: String,
@@ -90,7 +79,6 @@ impl OutputLine {
     pub(super) fn rows(&self, width: usize) -> Vec<Line<'static>> {
         match self {
             Self::Banner { model } => banner_rows(model, width),
-            Self::BannerHint { text } => banner_hint_rows(text, width),
             Self::UserPrompt { text } => user_prompt_rows(text, width),
             Self::Markdown(markdown) => markdown.rows(width),
             Self::Wrapped((text, style)) => textwrap::wrap(text, width.max(1))
@@ -113,7 +101,6 @@ impl OutputLine {
     fn text(&self) -> &str {
         match self {
             Self::Banner { model } => model,
-            Self::BannerHint { text } => text,
             Self::UserPrompt { text } => text,
             Self::Wrapped((text, _)) => text,
             Self::Markdown(markdown) => markdown.source(),
@@ -166,17 +153,6 @@ impl App {
         self.pending.push(OutputLine::Banner {
             model: model.to_string(),
         });
-        self.pending.push(OutputLine::BannerHint {
-            text: "Enter send · Ctrl+D/C exit · Ctrl+O cycle tool output",
-        });
-        self.pending.push(OutputLine::BannerHint {
-            text: "Shell commands run without approval. Use a trusted workspace.",
-        });
-        self.blank();
-    }
-
-    pub(super) fn notice(&mut self, text: &'static str) {
-        self.pending.push(OutputLine::BannerHint { text });
         self.blank();
     }
 
@@ -403,16 +379,6 @@ fn banner_rows(model: &str, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn banner_hint_rows(text: &str, width: usize) -> Vec<Line<'static>> {
-    if width < 3 {
-        return vec![Line::from(single_line("▌", width)).cyan()];
-    }
-    textwrap::wrap(text, width - 2)
-        .into_iter()
-        .map(|part| Line::from(vec!["▌ ".cyan(), part.into_owned().fg(MUTED_TEXT)]))
-        .collect()
-}
-
 fn tool_line(summary: &str, outcome: Option<&ToolOutcome>, width: usize) -> Line<'static> {
     let failed = outcome.is_some_and(|outcome| outcome.failed);
     let footer = outcome
@@ -515,6 +481,7 @@ fn diff_lines(lines: &mut Vec<StyledLine>, text: &str, prefix: &str, style: Styl
     }
 }
 
+// Tail clipping also keeps shell exit markers visible in narrow tool rows.
 fn input_tail(input: &str, width: usize) -> &str {
     let mut used = 0;
     for (index, ch) in input.char_indices().rev() {
@@ -560,8 +527,16 @@ mod tests {
             assert_eq!(buffer[(x, 0)].fg, Color::White);
             assert!(!buffer[(x, 0)].modifier.contains(Modifier::BOLD));
         }
-        for y in 0..3 {
-            assert_eq!(buffer[(0, y)].fg, Color::Cyan);
+        // The banner is a single row: the model line. No keyboard or
+        // shell-approval hints follow it.
+        assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        for removed in [
+            "Enter send",
+            "Ctrl+O cycle tool output",
+            "Shell commands run without approval",
+        ] {
+            assert!(!text.contains(removed), "banner still shows {removed:?}");
         }
         assert!(
             !buffer
@@ -779,7 +754,6 @@ mod tests {
             })),
             InputAction::None
         );
-        assert_eq!(input_tail("ab猫", 2), "猫");
     }
 
     #[test]

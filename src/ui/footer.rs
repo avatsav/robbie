@@ -101,22 +101,11 @@ impl App {
                 Line::from(format!("{path}{suffix}")).fg(MUTED_TEXT),
                 Rect::new(area.x, y, area.width, 1),
             );
-            let mode = format!("Ctrl+O: {}", self.output_mode.label());
-            frame.render_widget(
-                Line::from(single_line(&mode, area.width as usize)).fg(MUTED_TEXT),
-                Rect::new(area.x, y + 1, area.width, 1),
-            );
-            let budget = (area.width as usize).saturating_sub(mode.width() + 2);
-            if budget >= 8 && !self.model.is_empty() {
-                let model = single_line(&self.model, budget);
+            let model = single_line(&self.model, area.width as usize);
+            if !model.is_empty() {
                 frame.render_widget(
-                    Line::from(model.as_str()).fg(MUTED_TEXT),
-                    Rect::new(
-                        area.right() - model.width() as u16,
-                        y + 1,
-                        model.width() as u16,
-                        1,
-                    ),
+                    Line::from(model).fg(MUTED_TEXT),
+                    Rect::new(area.x, y + 1, area.width, 1),
                 );
             }
         }
@@ -207,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_shows_context_mode_and_right_aligned_model_without_metrics() {
+    fn footer_shows_context_and_model_without_mode_hint_or_metrics() {
         let app = App {
             model: "test/model".into(),
             workspace: Workspace {
@@ -226,8 +215,8 @@ mod tests {
         assert_eq!(rows[0], "─".repeat(80));
         assert_eq!(rows[2], "─".repeat(80));
         assert!(rows[3].starts_with("~/project (main)"));
-        assert!(rows[4].starts_with("Ctrl+O: concise"));
-        assert!(rows[4].ends_with("test/model"));
+        assert_eq!(rows[4].trim_end(), "test/model");
+        assert!(!text.contains("Ctrl+O"));
         for unwanted in ["pi-lens", "tokens", "context", "LSP"] {
             assert!(!text.contains(unwanted));
         }

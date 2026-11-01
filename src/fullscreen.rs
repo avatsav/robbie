@@ -45,8 +45,6 @@ impl App {
     fn new(model: &str) -> Self {
         let mut app = Self::default();
         app.content.banner(model);
-        app.content
-            .notice("Drag and release to copy · wheel/PgUp/PgDn/End scroll");
         app
     }
 
