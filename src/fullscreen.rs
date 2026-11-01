@@ -63,8 +63,11 @@ impl App {
     }
 
     fn view(&mut self, frame: &mut Frame) {
-        let [history, live] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(frame.area());
+        let [history, live] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(self.content.live_height(frame.area().width)),
+        ])
+        .areas(frame.area());
         let rows = self.rows(history.width as usize);
         if history != self.history_area {
             // Mouse coordinates may refer to different text after a resize.
@@ -229,10 +232,18 @@ async fn run_app(
     receiver: &mut UnboundedReceiver<AgentEvent>,
 ) -> Result<()> {
     let mut app = App::new(&agent.model);
+    let mut workspace = ui::WorkspaceMonitor::start();
+    workspace.apply_current(&mut app.content);
     let mut keys = EventStream::new();
     loop {
         terminal.draw(|frame| app.view(frame))?;
-        let event = keys.next().await.context("terminal input closed")??;
+        let event = tokio::select! {
+            event = keys.next() => event.context("terminal input closed")??,
+            Some(snapshot) = workspace.changed() => {
+                app.content.set_workspace(snapshot);
+                continue;
+            }
+        };
         match app.handle_terminal_event(event)? {
             InputAction::Quit => return Ok(()),
             InputAction::None => continue,
@@ -245,6 +256,7 @@ async fn run_app(
             &mut app,
             &mut keys,
             receiver,
+            &mut workspace,
             agent.run(prompt.trim()),
         )
         .await?
@@ -267,6 +279,7 @@ async fn run_turn(
     app: &mut App,
     keys: &mut EventStream,
     receiver: &mut UnboundedReceiver<AgentEvent>,
+    workspace: &mut ui::WorkspaceMonitor,
     run: impl std::future::Future<Output = Result<String>>,
 ) -> Result<TurnOutcome> {
     tokio::pin!(run);
@@ -279,6 +292,7 @@ async fn run_turn(
                 return Ok(TurnOutcome::Finished(result));
             }
             Some(event) = receiver.recv() => app.activity(event),
+            Some(snapshot) = workspace.changed() => app.content.set_workspace(snapshot),
             _ = ticks.tick() => app.content.advance_tick(),
             event = keys.next() => {
                 let event = event.context("terminal input closed")??;
@@ -323,7 +337,9 @@ mod tests {
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
+                let mut workspace = ui::WorkspaceMonitor::start();
                 let mut app = App::new("test/model");
+                workspace.apply_current(&mut app.content);
                 app.handle_event(Event::Paste("Read Cargo.toml and summarize dependencies".into()));
                 app.content.submit();
                 let mut keys = EventStream::new();
@@ -344,7 +360,7 @@ mod tests {
                     sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText(answer.into()) })?;
                     Ok(answer.into())
                 };
-                match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, work).await? {
+                match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, &mut workspace, work).await? {
                     TurnOutcome::Finished(result) => app.content.finish_turn(result),
                     TurnOutcome::Quit => anyhow::bail!("quit before response"),
                 }
@@ -369,7 +385,9 @@ mod tests {
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
+                let mut workspace = ui::WorkspaceMonitor::start();
                 let mut app = App::default();
+                workspace.apply_current(&mut app.content);
                 assistant(
                     &mut app,
                     (0..60)
@@ -378,6 +396,13 @@ mod tests {
                         .join("\n\n"),
                 );
                 assistant(&mut app, "Blocked-read-test");
+                app.activity(AgentEvent {
+                    source: "main",
+                    kind: EventKind::ToolStarted {
+                        name: "read_file".into(),
+                        input: json!({"path": path}),
+                    },
+                });
                 let mut keys = EventStream::new();
                 let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
                 let mut tools = crate::tools::ToolRegistry::new();
@@ -388,8 +413,15 @@ mod tests {
                     }
                     Ok(output)
                 };
-                let outcome =
-                    run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, work).await?;
+                let outcome = run_turn(
+                    &mut terminal,
+                    &mut app,
+                    &mut keys,
+                    &mut receiver,
+                    &mut workspace,
+                    work,
+                )
+                .await?;
                 anyhow::ensure!(
                     matches!(outcome, TurnOutcome::Quit),
                     "expected Ctrl+C exit during blocked read"

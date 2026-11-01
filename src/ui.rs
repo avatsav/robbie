@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::time::Instant;
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+#[cfg(test)]
+use ratatui::Frame;
 use ratatui::{
-    Frame,
-    layout::Rect,
     style::{Color, Style, Stylize},
     text::Line,
 };
@@ -17,7 +16,11 @@ use crate::{
     markdown::Markdown,
 };
 
+mod footer;
 mod tool_display;
+mod workspace;
+
+pub(super) use workspace::WorkspaceMonitor;
 
 type StyledLine = (String, Style);
 
@@ -38,6 +41,14 @@ enum ToolOutputMode {
 }
 
 impl ToolOutputMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Concise => "concise",
+            Self::Relaxed => "relaxed",
+            Self::Full => "full",
+        }
+    }
+
     fn next(self) -> Self {
         match self {
             Self::Concise => Self::Relaxed,
@@ -128,8 +139,9 @@ pub(super) enum InputAction {
 pub(super) struct App {
     input: String,
     pending: Vec<OutputLine>,
-    status: String,
-    started: Option<Instant>,
+    working: bool,
+    model: String,
+    workspace: workspace::Workspace,
     tick: usize,
     failed: bool,
     // A child can run tools while the parent's sub_agent call is still active.
@@ -149,13 +161,8 @@ impl App {
         self.tick = self.tick.wrapping_add(1);
     }
 
-    fn active_tool(&self) -> Option<&ToolActivity> {
-        self.active_tools
-            .get("subagent")
-            .or_else(|| self.active_tools.get("main"))
-    }
-
     pub(super) fn banner(&mut self, model: &str) {
+        self.model = clean(model).replace('\n', " ");
         self.pending.push(OutputLine::Banner {
             model: model.to_string(),
         });
@@ -193,35 +200,25 @@ impl App {
             text: clean(&prompt),
         });
         self.blank();
-        self.started = Some(Instant::now());
-        self.status = "waiting for model…".into();
+        self.working = true;
         prompt
     }
 
     pub(super) fn finish_turn(&mut self, result: Result<String>) {
-        self.started = None;
+        self.working = false;
         self.active_tools.clear();
-        match result {
-            Ok(_) => self.status.clear(),
-            Err(error) => {
-                self.push(format!("[error] {error:#}"), Style::new().red());
-                self.blank();
-                self.failed = true;
-                self.status = "Session failed; restart Robbie. Ctrl+D/C to exit.".into();
-            }
+        if let Err(error) = result {
+            self.push(format!("[error] {error:#}"), Style::new().red());
+            self.blank();
+            self.failed = true;
         }
     }
 
     pub(super) fn activity(&mut self, event: AgentEvent) {
+        self.working = true;
         let source = event.source;
         match event.kind {
-            EventKind::ModelStarted => {
-                self.status = if source == "main" {
-                    "waiting for model…".into()
-                } else {
-                    "agent: waiting for model…".into()
-                };
-            }
+            EventKind::ModelStarted => {}
             EventKind::AssistantText(text) => {
                 if self.needs_text_separator {
                     self.blank();
@@ -248,7 +245,6 @@ impl App {
                     .collect::<Vec<_>>()
                     .join(" ");
                 let summary = format!("[{prefix}] {arguments}");
-                self.status = format!("running {prefix}…");
                 self.active_tools
                     .insert(source, ToolActivity { summary, input });
             }
@@ -324,7 +320,6 @@ impl App {
                         self.blank();
                     }
                 }
-                self.status = "waiting for model…".into();
             }
         }
     }
@@ -369,44 +364,6 @@ impl App {
     #[cfg(test)]
     fn view(&self, frame: &mut Frame) {
         self.view_live(frame, frame.area());
-    }
-
-    pub(super) fn view_live(&self, frame: &mut Frame, area: Rect) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let prefix = if area.width >= 2 { "❯ " } else { "" };
-        let tail = input_tail(
-            &self.input,
-            area.width
-                .saturating_sub(prefix.width() as u16)
-                .saturating_sub(1) as usize,
-        );
-        let prompt = Line::from(vec![prefix.cyan(), tail.into()]);
-        let prompt_y = area.bottom() - 1;
-        frame.render_widget(prompt, Rect::new(area.x, prompt_y, area.width, 1));
-        frame.set_cursor_position((area.x + (prefix.width() + tail.width()) as u16, prompt_y));
-        if area.height > 1 {
-            let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][self.tick % 10];
-            // Prefer the child's current tool, then restore the parent call's
-            // running row when that child tool finishes.
-            if let Some(tool) = self.active_tool() {
-                frame.render_widget(
-                    tool_line(&tool.summary, None, area.width as usize),
-                    Rect::new(area.x, area.y, area.width, 1),
-                );
-            } else {
-                let status = if let Some(start) = self.started {
-                    format!("{spinner} {}s · {}", start.elapsed().as_secs(), self.status)
-                } else {
-                    self.status.clone()
-                };
-                frame.render_widget(
-                    Line::from(single_line(&status, area.width as usize)).fg(MUTED_TEXT),
-                    Rect::new(area.x, area.y, area.width, 1),
-                );
-            }
-        }
     }
 }
 
@@ -1074,7 +1031,7 @@ mod tests {
             } else {
                 "[agent/skill] rust-for-kotlin"
             };
-            assert_eq!(app.active_tool().unwrap().summary, expected);
+            assert_eq!(app.active_tools.get(source).unwrap().summary, expected);
             app.activity(AgentEvent {
                 source,
                 kind: EventKind::ToolFinished {
@@ -1161,7 +1118,7 @@ mod tests {
         terminal.draw(|frame| app.view(frame))?;
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].fg, MUTED_CYAN);
-        assert_eq!(buffer[(8, 0)].fg, MUTED_TEXT);
+        assert_eq!(buffer[(8, 0)].fg, MUTED_CYAN);
         assert!(
             !buffer
                 .content
@@ -1169,7 +1126,7 @@ mod tests {
                 .any(|cell| cell.modifier.contains(Modifier::DIM))
         );
         assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
-        assert_eq!(buffer[(17, 0)].symbol(), "…");
+        assert_eq!(buffer[(17, 0)].symbol(), "─");
         app.activity(AgentEvent {
             source: "main",
             kind: EventKind::ToolFinished {
@@ -1225,7 +1182,8 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("[agent/read] Cargo.toml"));
+        assert!(text.contains("Working…"));
+        let before_completion = text;
         app.activity(AgentEvent {
             source: "subagent",
             kind: EventKind::ToolFinished {
@@ -1242,7 +1200,9 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("[sub agent] inspect dependencies"));
+        assert_eq!(text, before_completion);
+        assert!(app.active_tools.contains_key("main"));
+        assert!(!app.active_tools.contains_key("subagent"));
         assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Reset);
         assert_eq!(app.pending.len(), 1);
         Ok(())
@@ -1360,11 +1320,11 @@ mod tests {
             ..App::default()
         };
         assert_eq!(app.submit(), "first prompt");
-        assert!(app.started.is_some());
+        assert!(app.working);
         app.handle_event(Event::Paste("next draft".into()));
         app.finish_turn(Ok("answer".into()));
         assert_eq!(app.input, "next draft");
-        assert!(app.started.is_none());
+        assert!(!app.working);
         app.finish_turn(Err(anyhow::anyhow!("request failed")));
         assert!(app.failed);
         assert_eq!(

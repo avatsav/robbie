@@ -58,7 +58,7 @@ def check_screen(completed_read=False):
                     return
                 if select.select([master], [], [], 0.05)[0]:
                     output.extend(os.read(master, 65536))
-            raise AssertionError(f"{fixture}: timed out waiting for terminal response")
+            raise AssertionError(f"{fixture}: timed out waiting for terminal response; exit={child.poll()}, tail={bytes(output[-2000:])!r}")
 
         def type_and_wait(data, marker):
             mark = len(output)
@@ -79,7 +79,11 @@ def check_screen(completed_read=False):
                 assert b"> Quoted-fixture" not in plain, "Raw quote marker leaked"
             else:
                 collect_until(lambda: b"Blocked-read-test" in output)
-                time.sleep(0.2)  # The FIFO never gets a writer.
+                collect_until(lambda: "Working…".encode() in output)
+                mark = len(output)
+                spinners = [glyph.encode() for glyph in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"]
+                collect_until(lambda: any(glyph in output[mark:] for glyph in spinners))
+                # The FIFO never gets a writer; activity must still animate.
 
             assert b"\x1b[?1049h" in output, "Full-screen mode not entered"
             assert b"\x1b[?1000h" in output, "Mouse reporting not enabled"
@@ -88,12 +92,12 @@ def check_screen(completed_read=False):
             if completed_read:
                 for marker in (b"1", b"2", b"3"):
                     type_and_wait(b"\x0f" + marker, marker)  # Ctrl+O cycles silently.
-                assert b"tools:" not in output
+                assert b"Ctrl+O: concise" in output
                 assert b"[dependencies]" not in output, "Mode change replayed tool output"
 
-            # Scroll back before selecting. Typing confirms the event loop
-            # progressed even if scrolling at a bound causes no redraw.
-            type_and_wait(b"\x1b[5~P", b"P")
+            # Reach the start regardless of footer height or terminal wrapping.
+            # Typing confirms processing even when another Page Up is a no-op.
+            type_and_wait(b"\x1b[5~" * 20 + b"P", b"P")
             mark = len(output)
             os.write(master, b"\x1b[<0;1;1M\x1b[<32;8;1M")  # Left down, drag.
             collect_until(lambda: b"48;2;50;75;110" in output[mark:])
@@ -120,7 +124,7 @@ def check_screen(completed_read=False):
 
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 60, 0, 0))
             child.send_signal(signal.SIGWINCH)
-            type_and_wait(b"Q", b"Q")
+            type_and_wait(b"@", b"@")  # Unique acknowledgement, unlike Q in Quoted-fixture.
             assert b"\x1b[6n" not in output, "Obsolete cursor-position query returned"
             assert b"F2" not in output, "Obsolete mouse-mode toggle returned"
 
