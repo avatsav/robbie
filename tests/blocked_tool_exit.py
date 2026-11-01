@@ -75,8 +75,15 @@ def check_frontend(frontend, completed_read=False):
                 response = b"Dependency summary rendered successfully" if native else b"Dependency-summary-rendered-successfully"
                 collect_until(lambda: response in output or b"normal duration" in output, timeout=5)
                 assert b"normal duration" not in output, "Native read/response hit cursor-position timeout"
+                collect_until(lambda: b"markdown_fixture" in output and b"Quoted-fixture" in output)
                 plain = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output)
                 assert b"[read] Cargo.toml" in plain
+                assert b"Dependencies" in plain, "Markdown heading missing"
+                assert b"## Dependencies" not in plain, "Raw heading syntax leaked"
+                assert b"**Dependency" not in plain, "Raw emphasis syntax leaked"
+                assert b"```" not in plain, "Code-fence presentation markers leaked"
+                assert "│".encode() in plain, "Quote gutter missing"
+                assert b"> Quoted-fixture" not in plain, "Raw quote marker leaked"
             else:
                 # A single-word marker survives Ratatui's skipped-space diffs.
                 marker = b"Blocked read test" if native else b"Blocked-read-test"

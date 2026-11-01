@@ -203,7 +203,7 @@ mod tests {
                         name: "read_file".into(), output, is_error,
                     }})?;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let answer = "Dependency-summary-rendered-successfully";
+                    let answer = "## Dependencies\n\n**Dependency-summary-rendered-successfully**\n\n```rust\nlet markdown_fixture = true;\n```\n\n> Quoted-fixture";
                     sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText(answer.into()) })?;
                     Ok(answer.into())
                 };
@@ -308,6 +308,52 @@ mod tests {
     }
 
     #[test]
+    fn submitted_prompt_gutter_reflows_with_retained_history() -> Result<()> {
+        use ratatui::style::Color;
+        let mut app = App::default();
+        app.handle_event(Event::Paste("alpha beta gamma".into()));
+        assert_eq!(app.content.submit(), "alpha beta gamma");
+        for width in [80, 12, 80, 12] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12))?;
+            terminal.draw(|frame| app.view(frame))?;
+            let buffer = terminal.backend().buffer();
+            let expected = if width == 12 { vec![(0, "a"), (1, "g")] } else { vec![(0, "a")] };
+            for (y, first) in expected {
+                assert_eq!(buffer[(0, y)].symbol(), "▌");
+                assert_eq!(buffer[(2, y)].symbol(), first);
+                assert_eq!(buffer[(0, y)].fg, Color::Rgb(217, 139, 92));
+                assert_eq!(buffer[(2, y)].fg, Color::Rgb(217, 139, 92));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn markdown_reflows_on_resize_with_styling_and_scrolling_intact() -> Result<()> {
+        use ratatui::style::Modifier;
+        let mut app = App::default();
+        assistant(&mut app, "# Heading\n\n**alpha beta gamma delta epsilon zeta eta theta**\n\n```rust\n    let x = 1;\n```\n\nLast paragraph.");
+        let wide = app.rows(80);
+        let narrow = app.rows(16);
+        assert!(narrow.len() > wide.len());
+        assert_eq!(app.rows(80), wide);
+        let mut terminal = Terminal::new(TestBackend::new(16, 8))?;
+        app.scroll_back = usize::MAX;
+        terminal.draw(|frame| app.view(frame))?;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].symbol(), "H");
+        assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(0, 2)].symbol(), "a");
+        assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
+        terminal.draw(|frame| app.view(frame))?;
+        let screen: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        assert!(screen.contains("Last paragraph."));
+        assert_eq!(app.scroll_back, 0);
+        Ok(())
+    }
+
+    #[test]
     fn fullscreen_preserves_banner_and_conversation_styling() -> Result<()> {
         use ratatui::style::{Color, Modifier};
         let mut app = App::new("test/model");
@@ -347,7 +393,7 @@ mod tests {
     #[test]
     fn events_strip_control_characters() {
         let mut app = App::default();
-        assistant(&mut app, "hello\r\n\u{1b}[31m");
+        assistant(&mut app, "hello\r\n\n\u{1b}[31m");
         let text = history(&mut app);
         assert!(!text.contains('\u{1b}'));
         assert!(text.contains("hello\n"));
@@ -356,7 +402,7 @@ mod tests {
     #[test]
     fn mouse_wheel_moves_visible_transcript_and_stops_at_bounds() -> Result<()> {
         let mut app = App::default();
-        assistant(&mut app, (0..40).map(|n| format!("row {n:02}")).collect::<Vec<_>>().join("\n"));
+        assistant(&mut app, (0..40).map(|n| format!("row {n:02}")).collect::<Vec<_>>().join("\n\n"));
         let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
         let screen = |terminal: &Terminal<TestBackend>| -> String {
             terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect()

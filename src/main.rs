@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 mod events;
 mod fullscreen;
+mod markdown;
 mod tools;
 mod ui;
 use events::{AgentEvent, EventKind, EventSender};

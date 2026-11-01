@@ -22,7 +22,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedReceiver;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::{Agent, events::{AgentEvent, EventKind}};
+use crate::{Agent, events::{AgentEvent, EventKind}, markdown::Markdown};
 
 type StyledLine = (String, Style);
 
@@ -62,7 +62,9 @@ pub(super) struct ToolOutcome {
 pub(super) enum OutputLine {
     Banner { model: String },
     BannerHint { text: &'static str },
+    UserPrompt { text: String },
     Wrapped(StyledLine),
+    Markdown(Markdown),
     Tool { summary: String, outcome: ToolOutcome },
     ToolOutput { prefix: &'static str, text: String },
 }
@@ -72,6 +74,8 @@ impl OutputLine {
         match self {
             Self::Banner { model } => banner_rows(model, width),
             Self::BannerHint { text } => banner_hint_rows(text, width),
+            Self::UserPrompt { text } => user_prompt_rows(text, width),
+            Self::Markdown(markdown) => markdown.rows(width),
             Self::Wrapped((text, style)) => textwrap::wrap(text, width.max(1)).into_iter()
                 .map(|line| Line::styled(line.into_owned(), *style)).collect(),
             Self::Tool { summary, outcome } => vec![tool_line(summary, Some(outcome), width)],
@@ -88,7 +92,9 @@ impl OutputLine {
         match self {
             Self::Banner { model } => model,
             Self::BannerHint { text } => text,
+            Self::UserPrompt { text } => text,
             Self::Wrapped((text, _)) => text,
+            Self::Markdown(markdown) => markdown.source(),
             Self::Tool { summary, .. } => summary,
             Self::ToolOutput { text, .. } => text,
         }
@@ -157,7 +163,7 @@ impl App {
 
     pub(super) fn submit(&mut self) -> String {
         let prompt = std::mem::take(&mut self.input);
-        self.push(format!("▌ {prompt}"), Style::new().fg(USER_ORANGE));
+        self.pending.push(OutputLine::UserPrompt { text: clean(&prompt) });
         self.blank();
         self.started = Some(Instant::now());
         self.status = "waiting for model…".into();
@@ -186,11 +192,12 @@ impl App {
             }
             EventKind::AssistantText(text) => {
                 if self.needs_text_separator { self.blank(); }
-                if source == "main" {
-                    self.push(text, Style::new());
-                } else {
-                    self.push(format!("[agent] {text}"), Style::new());
+                if source != "main" {
+                    // Keep the source label outside Markdown so a child's first
+                    // heading, list, or code fence is still parsed as a block.
+                    self.push("[agent]", Style::new());
                 }
+                self.pending.push(OutputLine::Markdown(Markdown::new(clean(&text))));
                 self.blank();
             }
             EventKind::ToolStarted { name, input } => {
@@ -303,6 +310,16 @@ impl App {
             }
         }
     }
+}
+
+fn user_prompt_rows(text: &str, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    // Wrap only the body, then add the gutter to every physical row. Reserve
+    // room for wide glyphs even when the viewport is too narrow for a full gutter.
+    let prefix: String = "▌ ".chars().take(width.saturating_sub(2)).collect();
+    textwrap::wrap(text, width - prefix.width()).into_iter()
+        .map(|part| Line::styled(format!("{prefix}{part}"), Style::new().fg(USER_ORANGE)))
+        .collect()
 }
 
 fn banner_rows(model: &str, width: usize) -> Vec<Line<'static>> {
@@ -645,6 +662,117 @@ mod tests {
     }
 
     #[test]
+    fn submitted_prompt_repeats_its_gutter_on_wrapped_rows() {
+        let mut app = App { input: "alpha beta gamma".into(), ..App::default() };
+        assert_eq!(app.submit(), "alpha beta gamma");
+        let rows = app.pending[0].rows(12);
+        assert_eq!(rows.iter().map(ToString::to_string).collect::<Vec<_>>(), ["▌ alpha beta", "▌ gamma"]);
+        for row in rows {
+            assert_eq!(row.style.fg, Some(USER_ORANGE));
+            assert!(row.width() <= 12);
+        }
+    }
+
+    #[test]
+    fn submitted_prompt_keeps_literal_text_and_fits_tiny_widths() {
+        let mut app = App { input: "**literal**\n\n猫猫 abcdefghijklmnop\u{1b}".into(), ..App::default() };
+        let prompt = app.submit();
+        assert!(prompt.ends_with('\u{1b}'), "display sanitizing must not change the submitted prompt");
+        let output = &app.pending[0];
+        let wide = output.rows(80);
+        assert_eq!(wide.iter().map(ToString::to_string).collect::<Vec<_>>(), [
+            "▌ **literal**", "▌ ", "▌ 猫猫 abcdefghijklmnop",
+        ]);
+        for width in 0..20 {
+            let rows = output.rows(width);
+            assert!(rows.iter().all(|row| row.width() <= width.max(2)));
+            let body: String = rows.iter().flat_map(|row| row.to_string().chars().collect::<Vec<_>>())
+                .filter(|ch| !ch.is_whitespace() && *ch != '▌').collect();
+            assert_eq!(body, "**literal**猫猫abcdefghijklmnop");
+            if width >= 4 {
+                assert!(rows.iter().all(|row| row.to_string().starts_with("▌ ")));
+            }
+        }
+        assert_eq!(output.rows(80), wide);
+    }
+
+    #[test]
+    fn inline_submitted_prompt_has_an_aligned_orange_gutter_on_each_row() -> Result<()> {
+        let mut app = App { input: "alpha beta gamma".into(), ..App::default() };
+        app.submit();
+        let mut terminal = Terminal::with_options(TestBackend::new(12, 12), inline_options())?;
+        flush_output(&mut terminal, &mut app.pending)?;
+        terminal.draw(|frame| app.view(frame))?;
+        let buffer = terminal.backend().buffer();
+        for (y, first) in [(0, "a"), (1, "g")] {
+            assert_eq!(buffer[(0, y)].symbol(), "▌");
+            assert_eq!(buffer[(1, y)].symbol(), " ");
+            assert_eq!(buffer[(2, y)].symbol(), first);
+            assert_eq!(buffer[(0, y)].fg, USER_ORANGE);
+            assert_eq!(buffer[(2, y)].fg, USER_ORANGE);
+        }
+        assert_eq!(buffer[(0, 2)].symbol(), " ", "trailing separator stays unmarked");
+        assert!(app.pending.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn inline_assistant_markdown_preserves_styles_and_drains_once() -> Result<()> {
+        use ratatui::style::Modifier;
+        let mut app = App::default();
+        app.activity(AgentEvent { source: "main", kind: EventKind::AssistantText(
+            "## Heading\n\n**bold** and `code`\n\n```rust\n    literal **code**\n```\n\n> quoted `code`".into(),
+        ) });
+        let mut terminal = Terminal::with_options(TestBackend::new(80, 24), inline_options())?;
+        flush_output(&mut terminal, &mut app.pending)?;
+        terminal.draw(|frame| app.view(frame))?;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].symbol(), "H");
+        assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(0, 2)].symbol(), "b");
+        assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(9, 2)].fg, Color::Cyan);
+        assert_eq!(buffer[(4, 4)].symbol(), "l");
+        assert!(!buffer[(4, 4)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(0, 6)].symbol(), "│");
+        assert_eq!(buffer[(2, 6)].fg, MUTED_TEXT);
+        assert_eq!(buffer[(9, 6)].fg, MUTED_TEXT);
+        assert!(buffer[(2, 6)].modifier.contains(Modifier::ITALIC));
+        assert!(!buffer[(0, 6)].modifier.contains(Modifier::ITALIC));
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(!text.contains("```"));
+        assert!(app.pending.is_empty());
+        let before = buffer.clone();
+        flush_output(&mut terminal, &mut app.pending)?;
+        terminal.draw(|frame| app.view(frame))?;
+        assert_eq!(terminal.backend().buffer(), &before);
+        Ok(())
+    }
+
+    #[test]
+    fn only_assistant_text_is_markdown_and_child_blocks_keep_their_label() {
+        let mut app = App { input: "**literal prompt**".into(), ..App::default() };
+        app.submit();
+        assert_eq!(app.pending[0].rows(80)[0].to_string(), "▌ **literal prompt**");
+        app.pending.clear();
+        app.output_mode = ToolOutputMode::Full;
+        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
+            name: "read_file".into(), output: "# literal file\n**not bold**".into(), is_error: false,
+        } });
+        let rows = app.take_output().iter().flat_map(|line| line.rows(80)).collect::<Vec<_>>();
+        assert!(rows.iter().any(|line| line.to_string() == "# literal file"));
+        assert!(rows.iter().any(|line| line.to_string() == "**not bold**"));
+        app.activity(AgentEvent { source: "subagent", kind: EventKind::AssistantText(
+            "# Child\n\n```\n    **literal**\n```\n\nhello\u{1b}[31m".into(),
+        ) });
+        let rows = app.take_output().iter().flat_map(|line| line.rows(80)).collect::<Vec<_>>();
+        let text = rows.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+        assert!(text.starts_with("[agent]\nChild\n"), "{text}");
+        assert!(text.contains("    **literal**"));
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
     fn input_actions_and_paste_do_not_accidentally_submit() {
         let mut app = App::default();
         let enter = || Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -982,7 +1110,7 @@ mod tests {
                         name: "read_file".into(), output, is_error,
                     }})?;
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText("Dependency summary rendered successfully".into()) })?;
+                    sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText("## Dependencies\n\n**Dependency summary rendered successfully**\n\n```rust\nlet markdown_fixture = true;\n```\n\n> Quoted-fixture".into()) })?;
                     Ok("Dependency summary rendered successfully".into())
                 };
                 match run_turn(&mut terminal, &mut app, &mut receiver, work).await? {
