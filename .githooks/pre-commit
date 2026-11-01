@@ -1,0 +1,33 @@
+#!/bin/sh
+# Check the working tree without modifying files or staging anything.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: Cargo is required. Install the Rust toolchain first." >&2
+    exit 1
+fi
+if ! command -v ruff >/dev/null 2>&1; then
+    echo "pre-commit: Ruff is required for the Python test helpers. Install Ruff and retry." >&2
+    exit 1
+fi
+
+echo "Checking Rust formatting..."
+if ! cargo fmt --all -- --check; then
+    echo "pre-commit: Run 'cargo fmt --all', stage the changes, and retry." >&2
+    exit 1
+fi
+
+echo "Running Clippy..."
+cargo clippy --locked --all-targets --all-features -- -D warnings
+
+echo "Checking Python formatting..."
+if ! ruff format --check tests; then
+    echo "pre-commit: Run 'ruff format tests', stage the changes, and retry." >&2
+    exit 1
+fi
+
+echo "Running Ruff..."
+ruff check tests

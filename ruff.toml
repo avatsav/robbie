@@ -1,0 +1,5 @@
+target-version = "py310"
+
+[lint]
+# Ruff's standard correctness rules; keep project behavior independent of user config.
+select = ["E4", "E7", "E9", "F"]
