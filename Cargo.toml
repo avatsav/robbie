@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 textwrap = "0.16.4"
-tui-markdown = { version = "0.3.12", default-features = false }
+tui-markdown = { version = "0.3.13", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "sync"] }
 unicode-segmentation = "1"
 unicode-width = "0.2.3"
