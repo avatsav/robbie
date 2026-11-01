@@ -90,6 +90,8 @@ def check_frontend(frontend, completed_read=False):
                 collect_until(lambda: marker in output)
                 # No FIFO writer exists for the entire lifetime of the child.
                 time.sleep(0.2)
+            for mode in (1000, 1002, 1003):
+                assert f"\x1b[?{mode}h".encode() not in output, "Mouse capture blocks ordinary terminal drag selection"
             os.write(master, b"Z")
             collect_until(lambda: b"Z" in output)
             if completed_read:
@@ -118,6 +120,21 @@ def check_frontend(frontend, completed_read=False):
                 mark = len(output)
                 os.write(master, b"\x1b[5~")  # Page Up
                 collect_until(lambda: len(output) > mark)
+                # Test F2 in both the idle loop and the blocked-tool busy loop.
+                mark = len(output)
+                os.write(master, b"\x1bOQ")  # F2: opt into mouse scrolling
+                collect_until(lambda: b"\x1b[?1006h" in output[mark:])
+                if not completed_read:
+                    mark = len(output)
+                    os.write(master, b"\x1b[<64;10;10M")  # SGR wheel up
+                    collect_until(lambda: len(output) > mark)
+                mark = len(output)
+                os.write(master, b"\x1bOQ")  # F2: return to selection
+                collect_until(lambda: b"\x1b[?1006l" in output[mark:])
+                mark = len(output)
+                os.write(master, b"\x1bOQ")  # Leave capture ON to exercise cleanup
+                collect_until(lambda: b"\x1b[?1006h" in output[mark:])
+            shutdown_mark = len(output)
             os.write(master, b"\x03")  # Ctrl+C in raw mode
             collect_until(lambda: (b"\x1b[?2004l" if native else b"\x1b[?1049l") in output)
             code = child.wait(timeout=3)
@@ -128,7 +145,7 @@ def check_frontend(frontend, completed_read=False):
                 assert b"\x1b[?1049l" not in output, "Native exit restored a stale alternate-screen cursor; shell redraw can erase the last turn"
                 assert b"\x1b[?2004l" in output, "Paste mode not disabled"
             else:
-                assert b"\x1b[?1006l" in output, "Mouse reporting not disabled"
+                assert b"\x1b[?1006l" in output[shutdown_mark:], "Mouse reporting not disabled on exit"
             assert termios.tcgetattr(slave) == original, "Terminal attributes not restored"
             scenario = "completed read/response" if completed_read else "blocked read"
             print(f"PASS {frontend}: responsive during {scenario}; Ctrl+C restores terminal and exits.")

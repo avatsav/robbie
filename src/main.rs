@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -6,12 +7,13 @@ use serde_json::{Value, json};
 mod events;
 mod fullscreen;
 mod markdown;
+mod skills;
 mod tools;
 mod ui;
 use events::{AgentEvent, EventKind, EventSender};
 use tools::ToolRegistry;
 
-const SYSTEM: &str = "You are a coding agent. Use bash to inspect and change the workspace. Act first, then report clearly.";
+const SYSTEM: &str = "You are a coding agent. Use tools to inspect and change the workspace. Load relevant skills before acting, then report clearly.";
 
 struct Agent {
     client: reqwest::Client,
@@ -29,6 +31,15 @@ struct Agent {
 }
 
 impl Agent {
+    fn system_prompt(&self) -> String {
+        let descriptions = self.tools.skill_descriptions();
+        if descriptions.is_empty() {
+            SYSTEM.to_string()
+        } else {
+            format!("{SYSTEM}\n\nAvailable skills (use load_skill for full instructions):\n{descriptions}")
+        }
+    }
+
     fn emit(&self, kind: EventKind) {
         // A closed frontend must not turn a completed tool into a failed call.
         let _ = self.events.send(AgentEvent { source: self.source, kind });
@@ -41,7 +52,7 @@ impl Agent {
             let mut request = json!({
                     "model": self.model,
                     "max_tokens": 8000,
-                    "system": SYSTEM,
+                    "system": self.system_prompt(),
                     "messages": self.messages,
                     "tools": self.tools.schemas()
                 });
@@ -131,6 +142,10 @@ fn run_with_runtime(future: impl std::future::Future<Output = Result<()>>) -> Re
 
 async fn run() -> Result<()> {
     dotenvy::dotenv().ok();
+    let skills_directory = std::env::current_dir()?.join("skills");
+    let skills = Arc::new(tokio::task::spawn_blocking(move || {
+        skills::SkillRegistry::scan(&skills_directory)
+    }).await.context("skill scanning task failed")??);
     let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut agent = Agent {
         client: reqwest::Client::new(),
@@ -139,7 +154,7 @@ async fn run() -> Result<()> {
         provider: std::env::var("OPENROUTER_PROVIDER").ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
-        tools: ToolRegistry::new(),
+        tools: ToolRegistry::with_skills(skills),
         events,
         source: "main",
         messages: Vec::new(),

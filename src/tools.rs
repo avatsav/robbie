@@ -1,11 +1,15 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
+use crate::skills::SkillRegistry;
+
 mod files;
+mod load_skill;
 mod sub_agent;
 mod todo;
 
@@ -19,18 +23,29 @@ trait Tool: Send + Sync {
 
 pub struct ToolRegistry {
     tools: HashMap<&'static str, Box<dyn Tool>>,
+    skills: Arc<SkillRegistry>,
 }
 
 impl ToolRegistry {
+    #[cfg(test)]
     pub fn new() -> Self {
-        let mut registry = Self::child();
+        Self::with_skills(Arc::new(SkillRegistry::default()))
+    }
+
+    pub fn with_skills(skills: Arc<SkillRegistry>) -> Self {
+        let mut registry = Self::child(skills);
         registry.register(Box::new(todo::TodoTool::default()));
         registry
     }
 
-    // Children can use workspace tools, but cannot delegate recursively.
-    fn child() -> Self {
-        let mut registry = Self { tools: HashMap::new() };
+    pub fn skill_descriptions(&self) -> String {
+        self.skills.describe_available()
+    }
+
+    // Children can use workspace tools and skills, but cannot delegate recursively.
+    fn child(skills: Arc<SkillRegistry>) -> Self {
+        let mut registry = Self { tools: HashMap::new(), skills: Arc::clone(&skills) };
+        registry.register(Box::new(load_skill::LoadSkill { skills }));
         registry.register(Box::new(Bash));
         registry.register(Box::new(files::ReadFile));
         registry.register(Box::new(files::WriteFile));
@@ -39,7 +54,7 @@ impl ToolRegistry {
     }
 
     pub fn enable_sub_agent(&mut self, client: reqwest::Client, api_key: String, model: String, provider: Option<String>, events: crate::events::EventSender) {
-        self.register(Box::new(sub_agent::SubAgent { client, api_key, model, provider, events }));
+        self.register(Box::new(sub_agent::SubAgent { client, api_key, model, provider, events, skills: Arc::clone(&self.skills) }));
     }
 
     fn register(&mut self, tool: Box<dyn Tool>) {

@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolRegistry};
 use crate::Agent;
+use crate::skills::SkillRegistry;
 
 pub(super) struct SubAgent {
     pub(super) client: reqwest::Client,
@@ -10,6 +13,7 @@ pub(super) struct SubAgent {
     pub(super) model: String,
     pub(super) provider: Option<String>,
     pub(super) events: crate::events::EventSender,
+    pub(super) skills: Arc<SkillRegistry>,
 }
 
 impl SubAgent {
@@ -19,7 +23,7 @@ impl SubAgent {
             api_key: self.api_key.clone(),
             model: self.model.clone(),
             provider: self.provider.clone(),
-            tools: ToolRegistry::child(),
+            tools: ToolRegistry::child(Arc::clone(&self.skills)),
             events: self.events.clone(),
             source: "subagent",
             messages: Vec::new(),
@@ -61,7 +65,7 @@ mod tests {
 
     fn sub_agent() -> SubAgent {
         let (events, _) = tokio::sync::mpsc::unbounded_channel();
-        SubAgent { client: reqwest::Client::new(), api_key: "test".into(), model: "test/model".into(), provider: None, events }
+        SubAgent { client: reqwest::Client::new(), api_key: "test".into(), model: "test/model".into(), provider: None, events, skills: Arc::new(SkillRegistry::default()) }
     }
 
     #[test]
@@ -72,7 +76,31 @@ mod tests {
         let second = tool.new_child();
         assert!(second.messages.is_empty());
         let names: Vec<String> = second.tools.schemas().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names, ["bash", "edit_file", "read_file", "write_file"]);
+        assert_eq!(names, ["bash", "edit_file", "load_skill", "read_file", "write_file"]);
+    }
+
+    #[tokio::test]
+    async fn children_share_skill_catalog_but_not_loaded_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("SKILL.md"), "---\nname: ownership\ndescription: Explain Rust ownership.\n---\nSecret ownership instructions.").unwrap();
+        let mut tool = sub_agent();
+        tool.skills = Arc::new(SkillRegistry::scan(root.path()).unwrap());
+        let mut first = tool.new_child();
+        assert!(Arc::ptr_eq(&tool.skills, &first.tools.skills));
+        assert!(first.system_prompt().contains("ownership: Explain Rust ownership."));
+        assert!(!first.system_prompt().contains("Secret ownership instructions."));
+        let (content, error) = first.tools.execute("load_skill", &json!({"name": "ownership"})).await;
+        assert!(!error);
+        assert!(content.contains("Secret ownership instructions."));
+        first.messages.push(json!({"role": "user", "content": content}));
+        let second = tool.new_child();
+        assert!(second.messages.is_empty());
+        assert_eq!(first.system_prompt(), second.system_prompt());
+
+        let mut parent = ToolRegistry::with_skills(Arc::clone(&tool.skills));
+        parent.enable_sub_agent(tool.client.clone(), tool.api_key.clone(), tool.model.clone(), None, tool.events.clone());
+        assert_eq!(parent.skill_descriptions(), second.tools.skill_descriptions());
+        assert!(parent.schemas().iter().any(|schema| schema["name"] == "sub_agent"));
     }
 
     #[test]

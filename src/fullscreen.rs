@@ -28,6 +28,7 @@ impl App {
     fn new(model: &str) -> Self {
         let mut app = Self::default();
         app.content.banner(model);
+        app.content.notice("Drag to select/copy · PgUp/PgDn/End scroll · F2 toggle mouse scrolling");
         app
     }
 
@@ -53,6 +54,19 @@ impl App {
         self.content.view_live(frame, live);
     }
 
+    fn handle_terminal_event(&mut self, event: Event, modes: &mut ScreenModes) -> Result<InputAction> {
+        if matches!(&event, Event::Key(key) if key.code == KeyCode::F(2) && key.kind != KeyEventKind::Release) {
+            modes.toggle_mouse()?;
+            self.content.notice(if modes.mouse_capture {
+                "Mouse scrolling enabled · F2 returns to text selection"
+            } else {
+                "Text selection enabled · Drag to select, then use your terminal's copy shortcut"
+            });
+            return Ok(InputAction::None);
+        }
+        Ok(self.handle_event(event))
+    }
+
     fn handle_event(&mut self, event: Event) -> InputAction {
         match &event {
             Event::Mouse(mouse) => {
@@ -76,14 +90,28 @@ impl App {
 }
 
 // Also release capture/paste mode during unwinding or a failed enable attempt.
-struct ScreenModes;
+struct ScreenModes {
+    mouse_capture: bool,
+}
 
 impl ScreenModes {
     fn new() -> Result<Self> {
-        let modes = Self;
-        execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)
+        let modes = Self { mouse_capture: false };
+        // Mouse reporting steals selection drags from the terminal. Leave it
+        // disabled by default; F2 opts into wheel/trackpad event handling.
+        execute!(std::io::stdout(), DisableMouseCapture, EnableBracketedPaste)
             .context("could not enable terminal input modes")?;
         Ok(modes)
+    }
+
+    fn toggle_mouse(&mut self) -> Result<()> {
+        if self.mouse_capture {
+            execute!(std::io::stdout(), DisableMouseCapture)
+        } else {
+            execute!(std::io::stdout(), EnableMouseCapture)
+        }.context("could not change mouse capture")?;
+        self.mouse_capture = !self.mouse_capture;
+        Ok(())
     }
 }
 
@@ -96,8 +124,8 @@ impl Drop for ScreenModes {
 pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) -> Result<()> {
     let mut terminal = ratatui::init();
     let result = async {
-        let _modes = ScreenModes::new()?;
-        run_app(&mut terminal, &mut agent, &mut receiver).await
+        let mut modes = ScreenModes::new()?;
+        run_app(&mut terminal, &mut agent, &mut receiver, &mut modes).await
     }.await;
     // Full-screen mode intentionally disappears on exit. Unlike native mode,
     // entering and leaving the alternate screen are a matched pair here.
@@ -105,20 +133,20 @@ pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) 
     result
 }
 
-async fn run_app(terminal: &mut DefaultTerminal, agent: &mut Agent, receiver: &mut UnboundedReceiver<AgentEvent>) -> Result<()> {
+async fn run_app(terminal: &mut DefaultTerminal, agent: &mut Agent, receiver: &mut UnboundedReceiver<AgentEvent>, modes: &mut ScreenModes) -> Result<()> {
     let mut app = App::new(&agent.model);
     let mut keys = EventStream::new();
     loop {
         terminal.draw(|frame| app.view(frame))?;
         let event = keys.next().await.context("terminal input closed")??;
-        match app.handle_event(event) {
+        match app.handle_terminal_event(event, modes)? {
             InputAction::Quit => return Ok(()),
             InputAction::None => continue,
             InputAction::Submit => {}
         }
         let prompt = app.content.submit();
         app.scroll_back = 0;
-        match run_turn(terminal, &mut app, &mut keys, receiver, agent.run(prompt.trim())).await? {
+        match run_turn(terminal, &mut app, &mut keys, receiver, modes, agent.run(prompt.trim())).await? {
             TurnOutcome::Finished(result) => app.content.finish_turn(result),
             TurnOutcome::Quit => return Ok(()),
         }
@@ -137,6 +165,7 @@ async fn run_turn(
     app: &mut App,
     keys: &mut EventStream,
     receiver: &mut UnboundedReceiver<AgentEvent>,
+    modes: &mut ScreenModes,
     run: impl std::future::Future<Output = Result<String>>,
 ) -> Result<TurnOutcome> {
     tokio::pin!(run);
@@ -153,7 +182,7 @@ async fn run_turn(
             event = keys.next() => {
                 let event = event.context("terminal input closed")??;
                 // Enter is ignored while busy, but drafting, modes and scrolling work.
-                match app.handle_event(event) {
+                match app.handle_terminal_event(event, modes)? {
                     InputAction::Quit => return Ok(TurnOutcome::Quit),
                     InputAction::None | InputAction::Submit => {}
                 }
@@ -185,7 +214,7 @@ mod tests {
         crate::run_with_runtime(async {
             let mut terminal = ratatui::init();
             let result = async {
-                let _modes = ScreenModes::new()?;
+                let mut modes = ScreenModes::new()?;
                 let mut app = App::new("test/model");
                 app.handle_event(Event::Paste("Read Cargo.toml and summarize dependencies".into()));
                 app.content.submit();
@@ -207,14 +236,14 @@ mod tests {
                     sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText(answer.into()) })?;
                     Ok(answer.into())
                 };
-                match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, work).await? {
+                match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, &mut modes, work).await? {
                     TurnOutcome::Finished(result) => app.content.finish_turn(result),
                     TurnOutcome::Quit => anyhow::bail!("quit before response"),
                 }
                 loop {
                     terminal.draw(|frame| app.view(frame))?;
                     let event = keys.next().await.context("terminal input closed")??;
-                    if app.handle_event(event) == InputAction::Quit { break }
+                    if app.handle_terminal_event(event, &mut modes)? == InputAction::Quit { break }
                 }
                 Ok(())
             }.await;
@@ -231,7 +260,7 @@ mod tests {
             let path = std::env::var("ROBBIE_TEST_FIFO")?;
             let mut terminal = ratatui::init();
             let result = async {
-                let _modes = ScreenModes::new()?;
+                let mut modes = ScreenModes::new()?;
                 let mut app = App::default();
                 assistant(&mut app, (0..60).map(|n| format!("history {n:02}")).collect::<Vec<_>>().join("\n"));
                 assistant(&mut app, "Blocked-read-test");
@@ -243,7 +272,7 @@ mod tests {
                     if error { anyhow::bail!("{output}"); }
                     Ok(output)
                 };
-                let outcome = run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, work).await?;
+                let outcome = run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, &mut modes, work).await?;
                 anyhow::ensure!(matches!(outcome, TurnOutcome::Quit), "expected Ctrl+C exit during blocked read");
                 Ok(())
             }.await;
@@ -267,7 +296,7 @@ mod tests {
                 name: "bash".into(), output, is_error: true,
             }});
             let text = history(&mut app);
-            assert!(text.contains("• [bash] some command"));
+            assert!(text.contains("• [shell] some command"));
             assert!(text.contains("[exit 7]"));
             assert_eq!(text.contains("output 00"), presses == 2, "only Full shows the first line");
             assert_eq!(text.contains("output 19"), presses != 0, "Concise hides output");
@@ -367,8 +396,11 @@ mod tests {
         assert!(buffer[(2, 0)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(9, 0)].fg, Color::White);
         assert!(!buffer[(9, 0)].modifier.contains(Modifier::BOLD));
-        assert_eq!(buffer[(2, 4)].fg, Color::Rgb(217, 139, 92));
-        assert_eq!(buffer[(0, 6)].fg, Color::Reset);
+        let rows = app.rows(100);
+        let user_y = rows.iter().position(|row| row.to_string() == "▌ user prompt").unwrap() as u16;
+        let assistant_y = rows.iter().position(|row| row.to_string() == "assistant answer").unwrap() as u16;
+        assert_eq!(buffer[(2, user_y)].fg, Color::Rgb(217, 139, 92));
+        assert_eq!(buffer[(0, assistant_y)].fg, Color::Reset);
         assert!(!buffer.content.iter().any(|cell| cell.modifier.contains(Modifier::DIM)));
         assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
         Ok(())

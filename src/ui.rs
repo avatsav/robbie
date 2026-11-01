@@ -24,6 +24,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{Agent, events::{AgentEvent, EventKind}, markdown::Markdown};
 
+mod tool_display;
+
 type StyledLine = (String, Style);
 
 const USER_ORANGE: Color = Color::Rgb(217, 139, 92);
@@ -149,6 +151,11 @@ impl App {
         self.blank();
     }
 
+    pub(super) fn notice(&mut self, text: &'static str) {
+        self.pending.push(OutputLine::BannerHint { text });
+        self.blank();
+    }
+
     fn push(&mut self, text: impl Into<String>, style: Style) {
         let text = clean(&text.into());
         for line in text.split('\n') {
@@ -201,16 +208,18 @@ impl App {
                 self.blank();
             }
             EventKind::ToolStarted { name, input } => {
-                let label = tool_label(&name);
+                let display = tool_display::presentation(&name);
+                let label = display.label;
                 let prefix = if source == "main" { label.to_string() } else { format!("agent/{label}") };
-                let summary = format!("[{prefix}] {}", tool_summary(&name, &input));
+                let arguments = clean(&display.summary(&input)).split_whitespace().collect::<Vec<_>>().join(" ");
+                let summary = format!("[{prefix}] {arguments}");
                 self.status = format!("running {prefix}…");
                 self.active_tools.insert(source, ToolActivity { summary, input });
             }
             EventKind::ToolFinished { name, output, is_error } => {
                 let activity = self.active_tools.remove(source);
                 let summary = activity.as_ref().map(|tool| tool.summary.clone())
-                    .unwrap_or_else(|| format!("[{}]", tool_label(&name)));
+                    .unwrap_or_else(|| format!("[{}]", tool_display::presentation(&name).label));
                 let footer = if name == "bash" && self.output_mode == ToolOutputMode::Concise {
                     bash_footer(&output).or_else(|| is_error.then(|| "[no exit code]".into()))
                 } else {
@@ -395,28 +404,6 @@ fn bash_preview(output: &str) -> Vec<OutputLine> {
 
 fn clean(text: &str) -> String {
     text.replace('\t', "    ").chars().filter(|c| !c.is_control() || *c == '\n').collect()
-}
-
-fn tool_label(name: &str) -> &str {
-    match name {
-        "read_file" => "read",
-        "write_file" => "write",
-        "edit_file" => "edit",
-        "sub_agent" => "agent",
-        _ => name,
-    }
-}
-
-fn tool_summary(name: &str, input: &Value) -> String {
-    let value = match name {
-        "bash" => input["command"].as_str(),
-        "read_file" | "write_file" | "edit_file" => input["path"].as_str(),
-        "sub_agent" => input["prompt"].as_str(),
-        "todo" => input["action"].as_str(),
-        _ => None,
-    };
-    let text = value.map(str::to_string).unwrap_or_else(|| input.to_string());
-    clean(&text).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn single_line(text: &str, width: usize) -> String {
@@ -898,8 +885,25 @@ mod tests {
     }
 
     #[test]
+    fn skill_tool_has_a_readable_header_while_running_and_after_completion() {
+        for source in ["main", "subagent"] {
+            let mut app = App::default();
+            app.activity(AgentEvent { source, kind: EventKind::ToolStarted {
+                name: "load_skill".into(), input: json!({"name": "rust-for-kotlin"}),
+            }});
+            let expected = if source == "main" { "[skill] rust-for-kotlin" } else { "[agent/skill] rust-for-kotlin" };
+            assert_eq!(app.active_tool().unwrap().summary, expected);
+            app.activity(AgentEvent { source, kind: EventKind::ToolFinished {
+                name: "load_skill".into(), output: "Skill instructions".into(), is_error: false,
+            }});
+            assert_eq!(app.pending[0].text(), expected);
+            assert_eq!(app.pending[0].rows(80)[0].to_string(), expected);
+        }
+    }
+
+    #[test]
     fn every_tool_has_one_compact_header() {
-        for name in ["bash", "read_file", "write_file", "edit_file", "todo", "sub_agent"] {
+        for name in ["bash", "read_file", "write_file", "edit_file", "todo", "sub_agent", "load_skill"] {
             for is_error in [false, true] {
                 let mut app = App::default();
                 app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
@@ -969,7 +973,7 @@ mod tests {
         }});
         terminal.draw(|frame| app.view(frame))?;
         let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
-        assert!(text.contains("[agent] inspect dependencies"));
+        assert!(text.contains("[sub agent] inspect dependencies"));
         assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Reset);
         assert_eq!(app.pending.len(), 1);
         Ok(())
