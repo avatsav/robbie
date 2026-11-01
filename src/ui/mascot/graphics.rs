@@ -156,7 +156,10 @@ mod tests {
         let grounded = canvas(&pixels, FontSize::new(8, 16)).unwrap();
         assert_eq!(grounded.dimensions(), (48, 48));
         assert_eq!(grounded.get_pixel(0, 0).0, [0, 0, 0, 0]);
-        assert_ne!(grounded.get_pixel(24, 47).0[3], 0);
+        // Both feet touch the shared baseline; the gap between them stays clear.
+        assert_ne!(grounded.get_pixel(12, 47).0[3], 0);
+        assert_ne!(grounded.get_pixel(33, 47).0[3], 0);
+        assert_eq!(grounded.get_pixel(24, 47).0[3], 0);
         for (y, row) in pixels.iter().enumerate() {
             for (x, pixel) in row.iter().enumerate() {
                 if let Some(Rgb(r, g, b)) = pixel {

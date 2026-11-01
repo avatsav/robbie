@@ -1,5 +1,6 @@
-//! Sprite geometry, expressions, and palettes owned by Robbie.
-//! Adapted from the user-supplied robbie-squish library (declared MIT).
+//! Little bot's geometry, expressions, and palettes, owned by Robbie.
+//! Expressions and shading adapted from the user-supplied robbie-squish library
+//! (declared MIT); the bot silhouettes are hand-drawn for Robbie.
 
 pub(super) const SIZE: usize = 16;
 pub(super) const COMPACT_SIZE: usize = 12;
@@ -11,22 +12,24 @@ pub(super) struct Rgb(pub(super) u8, pub(super) u8, pub(super) u8);
 pub(super) type Sprite = [[Option<Rgb>; SIZE]; SIZE];
 pub(super) type CompactSprite = [[Option<Rgb>; COMPACT_SIZE]; COMPACT_SIZE];
 
+// Two empty rows keep the aerial intact even at the highest two-pixel hop.
+// Both poses share a foot baseline and leave the final row transparent.
 const SHAPE: [&str; SIZE] = [
     "................",
     "................",
-    "................",
-    ".....######.....",
-    ".....######.....",
-    "...##########...",
+    ".......##.......",
+    ".......##.......",
     "...##########...",
     "..############..",
     "..############..",
-    ".##############.",
-    ".##############.",
-    ".##############.",
-    ".##############.",
-    ".##############.",
-    ".##############.",
+    "..############..",
+    "..############..",
+    "..############..",
+    "..############..",
+    "..############..",
+    "...##########...",
+    "....###..###....",
+    "....###..###....",
     "................",
 ];
 
@@ -35,18 +38,18 @@ const SQUISH_SHAPE: [&str; SIZE] = [
     "................",
     "................",
     "................",
-    "................",
-    "....########....",
-    "...##########...",
+    ".......##.......",
+    ".......##.......",
     "..############..",
     ".##############.",
     ".##############.",
-    "################",
-    "################",
-    "################",
-    "################",
-    "################",
-    "################",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    "..############..",
+    "...####..####...",
+    "...####..####...",
     "................",
 ];
 
@@ -54,15 +57,15 @@ const SQUISH_SHAPE: [&str; SIZE] = [
 const SHAPE_12: [&str; COMPACT_SIZE] = [
     "............",
     "............",
-    "....####....",
-    "....####....",
-    "..########..",
+    ".....##.....",
     "..########..",
     ".##########.",
     ".##########.",
     ".##########.",
     ".##########.",
     ".##########.",
+    "...##..##...",
+    "...##..##...",
     "............",
 ];
 
@@ -70,14 +73,14 @@ const SQUISH_SHAPE_12: [&str; COMPACT_SIZE] = [
     "............",
     "............",
     "............",
-    "....####....",
-    "..########..",
+    ".....##.....",
     ".##########.",
     "############",
     "############",
     "############",
     "############",
-    "############",
+    "..###..###..",
+    "..###..###..",
     "............",
 ];
 
@@ -212,7 +215,8 @@ fn sprite_grid<const N: usize>(
     }
 
     // Pixel-art decisions for each resolution, not rescaled vector geometry.
-    let (lx, rx, ey) = if N == 16 { (5, 10, 10) } else { (3, 7, 7) };
+    // Raise the face above the feet; every expression uses these same anchors.
+    let (lx, rx, ey) = if N == 16 { (5, 10, 9) } else { (3, 7, 6) };
     let eye = palette.eyes;
     match expression {
         Expression::Idle => {
@@ -236,31 +240,11 @@ fn sprite_grid<const N: usize>(
             eye_rect(&mut pixels, shape, rx, ey + 1, 2, 1, eye);
         }
         Expression::Happy => {
-            let eyes = if N == 16 {
-                [
-                    (4, 11),
-                    (5, 10),
-                    (6, 10),
-                    (7, 11),
-                    (9, 11),
-                    (10, 10),
-                    (11, 10),
-                    (12, 11),
-                ]
-            } else {
-                [
-                    (2, 8),
-                    (3, 7),
-                    (4, 7),
-                    (5, 8),
-                    (6, 8),
-                    (7, 7),
-                    (8, 7),
-                    (9, 8),
-                ]
-            };
-            for (x, y) in eyes {
-                eye_pixel(&mut pixels, shape, x, y, eye);
+            for x in [lx, rx] {
+                eye_pixel(&mut pixels, shape, x - 1, ey + 1, eye);
+                eye_pixel(&mut pixels, shape, x, ey, eye);
+                eye_pixel(&mut pixels, shape, x + 1, ey, eye);
+                eye_pixel(&mut pixels, shape, x + 2, ey + 1, eye);
             }
         }
         Expression::Surprised => {
@@ -343,11 +327,19 @@ mod tests {
                         }
                     }
                 }
-                assert!(
+                let expected_eye_pixels = match expression {
+                    Expression::Focused | Expression::Blink => 4,
+                    Expression::Surprised => 12,
+                    _ => 8,
+                };
+                assert_eq!(
                     pixels
                         .iter()
                         .flatten()
-                        .any(|pixel| *pixel == Some(palette.eyes))
+                        .filter(|pixel| **pixel == Some(palette.eyes))
+                        .count(),
+                    expected_eye_pixels,
+                    "clipped eyes in {N}×{N} {expression:?}"
                 );
             }
         }
@@ -362,24 +354,58 @@ mod tests {
     }
 
     #[test]
-    fn silhouettes_keep_the_original_broad_shoulders_and_belly() {
-        let width = |row: &str| row.bytes().filter(|&pixel| pixel == b'#').count();
-        assert_eq!(width(SHAPE[3]), 6);
-        assert_eq!(width(SHAPE[5]), 10);
-        assert!(SHAPE[9..15].iter().all(|row| width(row) == 14));
-        assert_eq!(width(SHAPE_12[2]), 4);
-        assert_eq!(width(SHAPE_12[4]), 8);
-        assert!(SHAPE_12[6..11].iter().all(|row| width(row) == 10));
+    fn both_resolutions_keep_the_aerial_boxy_body_and_separate_feet() {
+        assert_eq!(&SHAPE[2..4], &[".......##......."; 2]);
+        assert_eq!(SHAPE[4], "...##########...");
+        assert_eq!(&SHAPE[5..12], &["..############.."; 7]);
+        assert_eq!(&SHAPE[13..15], &["....###..###...."; 2]);
+        assert_eq!(&SQUISH_SHAPE[3..5], &[".......##......."; 2]);
+        assert_eq!(&SQUISH_SHAPE[6..12], &[".##############."; 6]);
+        assert_eq!(&SQUISH_SHAPE[13..15], &["...####..####..."; 2]);
+
+        assert_eq!(SHAPE_12[2], ".....##.....");
+        assert_eq!(SHAPE_12[3], "..########..");
+        assert_eq!(&SHAPE_12[4..9], &[".##########."; 5]);
+        assert_eq!(&SHAPE_12[9..11], &["...##..##..."; 2]);
+        assert_eq!(SQUISH_SHAPE_12[3], ".....##.....");
+        assert_eq!(&SQUISH_SHAPE_12[5..9], &["############"; 4]);
+        assert_eq!(&SQUISH_SHAPE_12[9..11], &["..###..###.."; 2]);
+    }
+
+    #[test]
+    fn face_is_raised_above_the_feet_in_both_poses() {
+        for pose in [BodyPose::Neutral, BodyPose::Squish] {
+            let pixels = sprite_with_pose(Expression::Idle, 0, pose, Palette::MINT);
+            for y in [9, 10] {
+                for x in [5, 6, 10, 11] {
+                    assert_eq!(pixels[y][x], Some(Palette::MINT.eyes));
+                }
+            }
+            let pixels = sprite_12_with_pose(Expression::Idle, 0, pose, Palette::MINT);
+            for y in [6, 7] {
+                for x in [3, 4, 7, 8] {
+                    assert_eq!(pixels[y][x], Some(Palette::MINT.eyes));
+                }
+            }
+        }
     }
 
     fn check_hops<const N: usize>(shape: &[&str; N]) {
+        assert!(shape[..2].iter().all(|row| row.bytes().all(|p| p == b'.')));
+        assert!(shape[N - 1].bytes().all(|p| p == b'.'));
         for expression in EXPRESSIONS {
             let grounded = sprite_grid(shape, expression, 0, Palette::MINT);
+            let occupied = grounded.iter().flatten().filter(|p| p.is_some()).count();
             for hop in [1, 2, usize::MAX] {
                 let lifted = sprite_grid(shape, expression, hop, Palette::MINT);
                 let hop = hop.min(2);
                 assert_eq!(lifted[..N - hop], grounded[hop..]);
                 assert!(lifted[N - hop..].iter().flatten().all(Option::is_none));
+                assert_eq!(
+                    lifted.iter().flatten().filter(|p| p.is_some()).count(),
+                    occupied,
+                    "a hop must not crop the aerial"
+                );
             }
         }
     }
