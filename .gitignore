@@ -1,5 +1,4 @@
 /target
 .env
 /LEARNING.md
-.ruff_cache/
 __pycache__/

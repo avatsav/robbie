@@ -11,8 +11,6 @@ HOOKS = ROOT / ".githooks"
 EXPECTED = [
     "cargo fmt --all -- --check",
     "cargo clippy --locked --all-targets --all-features -- -D warnings",
-    "ruff format --check tests",
-    "ruff check tests",
 ]
 
 
@@ -24,7 +22,7 @@ class PreCommitHookTests(unittest.TestCase):
         self.log = self.root / "checks.log"
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for tool in ("cargo", "ruff"):
+        for tool in ("cargo",):
             executable = self.bin / tool
             executable.write_text(
                 "#!/bin/sh\n"
@@ -74,9 +72,7 @@ class PreCommitHookTests(unittest.TestCase):
 
     def test_each_failure_blocks_the_commit_and_stops_later_checks(self):
         index_before = self.git("write-tree").stdout
-        for number, step in enumerate(
-            ("cargo fmt", "cargo clippy", "ruff format", "ruff check")
-        ):
+        for number, step in enumerate(("cargo fmt", "cargo clippy")):
             with self.subTest(step=step):
                 self.log.unlink(missing_ok=True)
                 self.env["FAIL_STEP"] = step
