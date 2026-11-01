@@ -21,10 +21,13 @@ fn workspace_path(root: &Path, path: &str, allow_new: bool) -> Result<PathBuf> {
             // A dangling symlink is not a new file: following it could escape the workspace.
             match std::fs::symlink_metadata(&candidate) {
                 Ok(_) => bail!("cannot resolve existing path"),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
-            let parent = candidate.parent().context("path has no parent")?.canonicalize()?;
+            let parent = candidate
+                .parent()
+                .context("path has no parent")?
+                .canonicalize()?;
             parent.join(candidate.file_name().context("path has no file name")?)
         }
         Err(error) => return Err(error.into()),
@@ -36,12 +39,17 @@ fn workspace_path(root: &Path, path: &str, allow_new: bool) -> Result<PathBuf> {
 }
 
 fn required<'a>(input: &'a Value, name: &str) -> Result<&'a str> {
-    input.get(name).and_then(Value::as_str).with_context(|| format!("missing or invalid {name}"))
+    input
+        .get(name)
+        .and_then(Value::as_str)
+        .with_context(|| format!("missing or invalid {name}"))
 }
 
 fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
     let path = required(input, "path")?;
-    if path.is_empty() { bail!("path must not be empty"); }
+    if path.is_empty() {
+        bail!("path must not be empty");
+    }
     match name {
         "read_file" => {
             let path = workspace_path(root, path, false)?;
@@ -49,13 +57,20 @@ fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
             let limited = match input.get("limit") {
                 None => content,
                 Some(value) => {
-                    let limit = value.as_u64().context("limit must be a non-negative integer")?;
-                    content.split_inclusive('\n').take(usize::try_from(limit).unwrap_or(usize::MAX)).collect()
+                    let limit = value
+                        .as_u64()
+                        .context("limit must be a non-negative integer")?;
+                    content
+                        .split_inclusive('\n')
+                        .take(usize::try_from(limit).unwrap_or(usize::MAX))
+                        .collect()
                 }
             };
             let truncated = limited.chars().count() > 50_000;
             let mut output: String = limited.chars().take(50_000).collect();
-            if truncated { output.push_str("\n[output truncated]"); }
+            if truncated {
+                output.push_str("\n[output truncated]");
+            }
             Ok(output)
         }
         "write_file" => {
@@ -67,11 +82,15 @@ fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
         "edit_file" => {
             let old = required(input, "old_text")?;
             let new = required(input, "new_text")?;
-            if old.is_empty() { bail!("old_text must not be empty"); }
+            if old.is_empty() {
+                bail!("old_text must not be empty");
+            }
             let path = workspace_path(root, path, false)?;
             let content = std::fs::read_to_string(&path)?;
             let count = content.match_indices(old).count();
-            if count != 1 { bail!("old_text must match exactly once (found {count})"); }
+            if count != 1 {
+                bail!("old_text must match exactly once (found {count})");
+            }
             std::fs::write(path, content.replacen(old, new, 1))?;
             Ok("File edited".to_string())
         }
@@ -85,7 +104,8 @@ async fn execute(name: &'static str, input: &Value) -> (String, bool) {
     let result = tokio::task::spawn_blocking(move || {
         let root = std::env::current_dir().context("cannot find workspace")?;
         run_file_tool(name, &input, &root)
-    }).await;
+    })
+    .await;
     match result {
         Ok(Ok(output)) => (output, false),
         Ok(Err(error)) => (format!("Error: {error:#}"), true),
@@ -95,38 +115,56 @@ async fn execute(name: &'static str, input: &Value) -> (String, bool) {
 
 #[async_trait]
 impl Tool for ReadFile {
-    fn name(&self) -> &'static str { "read_file" }
-    fn schema(&self) -> Value { json!({
-        "name": self.name(), "description": "Read a UTF-8 file in the workspace, optionally limiting the number of lines.",
-        "input_schema": { "type": "object", "properties": {
-            "path": {"type": "string"}, "limit": {"type": "integer", "minimum": 0}
-        }, "required": ["path"] }
-    }) }
-    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input).await }
+    fn name(&self) -> &'static str {
+        "read_file"
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "name": self.name(), "description": "Read a UTF-8 file in the workspace, optionally limiting the number of lines.",
+            "input_schema": { "type": "object", "properties": {
+                "path": {"type": "string"}, "limit": {"type": "integer", "minimum": 0}
+            }, "required": ["path"] }
+        })
+    }
+    async fn execute(&mut self, input: &Value) -> (String, bool) {
+        execute(self.name(), input).await
+    }
 }
 
 #[async_trait]
 impl Tool for WriteFile {
-    fn name(&self) -> &'static str { "write_file" }
-    fn schema(&self) -> Value { json!({
-        "name": self.name(), "description": "Create or overwrite a UTF-8 file in the workspace. Its parent directory must exist.",
-        "input_schema": { "type": "object", "properties": {
-            "path": {"type": "string"}, "content": {"type": "string"}
-        }, "required": ["path", "content"] }
-    }) }
-    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input).await }
+    fn name(&self) -> &'static str {
+        "write_file"
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "name": self.name(), "description": "Create or overwrite a UTF-8 file in the workspace. Its parent directory must exist.",
+            "input_schema": { "type": "object", "properties": {
+                "path": {"type": "string"}, "content": {"type": "string"}
+            }, "required": ["path", "content"] }
+        })
+    }
+    async fn execute(&mut self, input: &Value) -> (String, bool) {
+        execute(self.name(), input).await
+    }
 }
 
 #[async_trait]
 impl Tool for EditFile {
-    fn name(&self) -> &'static str { "edit_file" }
-    fn schema(&self) -> Value { json!({
-        "name": self.name(), "description": "Replace exactly one occurrence of old_text in a workspace file; fails if the match is absent or ambiguous.",
-        "input_schema": { "type": "object", "properties": {
-            "path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}
-        }, "required": ["path", "old_text", "new_text"] }
-    }) }
-    async fn execute(&mut self, input: &Value) -> (String, bool) { execute(self.name(), input).await }
+    fn name(&self) -> &'static str {
+        "edit_file"
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "name": self.name(), "description": "Replace exactly one occurrence of old_text in a workspace file; fails if the match is absent or ambiguous.",
+            "input_schema": { "type": "object", "properties": {
+                "path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}
+            }, "required": ["path", "old_text", "new_text"] }
+        })
+    }
+    async fn execute(&mut self, input: &Value) -> (String, bool) {
+        execute(self.name(), input).await
+    }
 }
 
 #[cfg(test)]
@@ -137,10 +175,18 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn blocked_file_read_does_not_block_the_executor() {
         use std::time::{Duration, Instant};
-        let root = std::env::current_dir().unwrap().join(format!(".robbie-fifo-test-{}", std::process::id()));
+        let root = std::env::current_dir()
+            .unwrap()
+            .join(format!(".robbie-fifo-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let fifo = root.join("pipe");
-        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
         // An OS thread guarantees the old blocking implementation eventually
         // unblocks too, so a failure cannot hang the test runtime.
         let writer_path = fifo.clone();
@@ -160,24 +206,72 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(output, "released");
         assert!(!is_error);
-        assert!(latency < Duration::from_millis(350), "executor stalled for {latency:?}");
+        assert!(
+            latency < Duration::from_millis(350),
+            "executor stalled for {latency:?}"
+        );
     }
 
     #[test]
     fn file_tools_create_read_and_edit() {
-        let root = std::env::temp_dir().join(format!("robbie-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let root = std::env::temp_dir().join(format!(
+            "robbie-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let _ = std::fs::remove_file(root.join("example.txt"));
-        run_file_tool("write_file", &json!({"path":"example.txt", "content":"one\ntwo\n"}), &root).unwrap();
-        assert_eq!(run_file_tool("read_file", &json!({"path":"example.txt", "limit":1}), &root).unwrap(), "one\n");
-        run_file_tool("edit_file", &json!({"path":"example.txt", "old_text":"two", "new_text":"three"}), &root).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("example.txt")).unwrap(), "one\nthree\n");
-        assert!(run_file_tool("edit_file", &json!({"path":"example.txt", "old_text":"e", "new_text":"x"}), &root).is_err());
-        assert!(run_file_tool("write_file", &json!({"path":"../outside.txt", "content":"x"}), &root).is_err());
+        run_file_tool(
+            "write_file",
+            &json!({"path":"example.txt", "content":"one\ntwo\n"}),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(
+            run_file_tool(
+                "read_file",
+                &json!({"path":"example.txt", "limit":1}),
+                &root
+            )
+            .unwrap(),
+            "one\n"
+        );
+        run_file_tool(
+            "edit_file",
+            &json!({"path":"example.txt", "old_text":"two", "new_text":"three"}),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("example.txt")).unwrap(),
+            "one\nthree\n"
+        );
+        assert!(
+            run_file_tool(
+                "edit_file",
+                &json!({"path":"example.txt", "old_text":"e", "new_text":"x"}),
+                &root
+            )
+            .is_err()
+        );
+        assert!(
+            run_file_tool(
+                "write_file",
+                &json!({"path":"../outside.txt", "content":"x"}),
+                &root
+            )
+            .is_err()
+        );
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(root.parent().unwrap().join("missing-outside-file"), root.join("link")).unwrap();
-            assert!(run_file_tool("write_file", &json!({"path":"link", "content":"x"}), &root).is_err());
+            std::os::unix::fs::symlink(
+                root.parent().unwrap().join("missing-outside-file"),
+                root.join("link"),
+            )
+            .unwrap();
+            assert!(
+                run_file_tool("write_file", &json!({"path":"link", "content":"x"}), &root).is_err()
+            );
         }
         std::fs::remove_dir_all(root).unwrap();
     }

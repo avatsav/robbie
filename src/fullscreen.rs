@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind, MouseEventKind},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, EventStream, KeyCode, KeyEventKind, MouseEventKind,
+    },
     execute,
 };
 use futures_util::StreamExt;
@@ -12,7 +15,11 @@ use ratatui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::{Agent, events::AgentEvent, ui::{self, InputAction, OutputLine}};
+use crate::{
+    Agent,
+    events::AgentEvent,
+    ui::{self, InputAction, OutputLine},
+};
 
 // The shared UI state owns formatting and input. This frontend owns retained
 // display history and scrolling instead of inserting it into terminal scrollback.
@@ -28,7 +35,8 @@ impl App {
     fn new(model: &str) -> Self {
         let mut app = Self::default();
         app.content.banner(model);
-        app.content.notice("Drag to select/copy · PgUp/PgDn/End scroll · F2 toggle mouse scrolling");
+        app.content
+            .notice("Drag to select/copy · PgUp/PgDn/End scroll · F2 toggle mouse scrolling");
         app
     }
 
@@ -38,24 +46,35 @@ impl App {
 
     fn rows(&mut self, width: usize) -> Vec<Line<'static>> {
         self.transcript.extend(self.content.take_output());
-        self.transcript.iter().flat_map(|line| line.rows(width)).collect()
+        self.transcript
+            .iter()
+            .flat_map(|line| line.rows(width))
+            .collect()
     }
 
     fn view(&mut self, frame: &mut Frame) {
-        let [history, live] = Layout::vertical([
-            Constraint::Min(0), Constraint::Length(2),
-        ]).areas(frame.area());
+        let [history, live] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(frame.area());
         let rows = self.rows(history.width as usize);
         let max_scroll = rows.len().saturating_sub(history.height as usize);
         self.scroll_back = self.scroll_back.min(max_scroll);
         let start = max_scroll.saturating_sub(self.scroll_back);
-        let visible: Vec<_> = rows.into_iter().skip(start).take(history.height as usize).collect();
+        let visible: Vec<_> = rows
+            .into_iter()
+            .skip(start)
+            .take(history.height as usize)
+            .collect();
         frame.render_widget(Paragraph::new(visible), history);
         self.content.view_live(frame, live);
     }
 
-    fn handle_terminal_event(&mut self, event: Event, modes: &mut ScreenModes) -> Result<InputAction> {
-        if matches!(&event, Event::Key(key) if key.code == KeyCode::F(2) && key.kind != KeyEventKind::Release) {
+    fn handle_terminal_event(
+        &mut self,
+        event: Event,
+        modes: &mut ScreenModes,
+    ) -> Result<InputAction> {
+        if matches!(&event, Event::Key(key) if key.code == KeyCode::F(2) && key.kind != KeyEventKind::Release)
+        {
             modes.toggle_mouse()?;
             self.content.notice(if modes.mouse_capture {
                 "Mouse scrolling enabled · F2 returns to text selection"
@@ -71,16 +90,29 @@ impl App {
         match &event {
             Event::Mouse(mouse) => {
                 match mouse.kind {
-                    MouseEventKind::ScrollUp => self.scroll_back = self.scroll_back.saturating_add(3),
-                    MouseEventKind::ScrollDown => self.scroll_back = self.scroll_back.saturating_sub(3),
+                    MouseEventKind::ScrollUp => {
+                        self.scroll_back = self.scroll_back.saturating_add(3)
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.scroll_back = self.scroll_back.saturating_sub(3)
+                    }
                     _ => {}
                 }
                 return InputAction::None;
             }
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::PageUp => { self.scroll_back = self.scroll_back.saturating_add(10); return InputAction::None; }
-                KeyCode::PageDown => { self.scroll_back = self.scroll_back.saturating_sub(10); return InputAction::None; }
-                KeyCode::End => { self.scroll_back = 0; return InputAction::None; }
+                KeyCode::PageUp => {
+                    self.scroll_back = self.scroll_back.saturating_add(10);
+                    return InputAction::None;
+                }
+                KeyCode::PageDown => {
+                    self.scroll_back = self.scroll_back.saturating_sub(10);
+                    return InputAction::None;
+                }
+                KeyCode::End => {
+                    self.scroll_back = 0;
+                    return InputAction::None;
+                }
                 _ => {}
             },
             _ => {}
@@ -96,7 +128,9 @@ struct ScreenModes {
 
 impl ScreenModes {
     fn new() -> Result<Self> {
-        let modes = Self { mouse_capture: false };
+        let modes = Self {
+            mouse_capture: false,
+        };
         // Mouse reporting steals selection drags from the terminal. Leave it
         // disabled by default; F2 opts into wheel/trackpad event handling.
         execute!(std::io::stdout(), DisableMouseCapture, EnableBracketedPaste)
@@ -109,7 +143,8 @@ impl ScreenModes {
             execute!(std::io::stdout(), DisableMouseCapture)
         } else {
             execute!(std::io::stdout(), EnableMouseCapture)
-        }.context("could not change mouse capture")?;
+        }
+        .context("could not change mouse capture")?;
         self.mouse_capture = !self.mouse_capture;
         Ok(())
     }
@@ -117,7 +152,11 @@ impl ScreenModes {
 
 impl Drop for ScreenModes {
     fn drop(&mut self) {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+        let _ = execute!(
+            std::io::stdout(),
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
     }
 }
 
@@ -126,14 +165,20 @@ pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) 
     let result = async {
         let mut modes = ScreenModes::new()?;
         run_app(&mut terminal, &mut agent, &mut receiver, &mut modes).await
-    }.await;
+    }
+    .await;
     // Full-screen mode intentionally disappears on exit. Unlike native mode,
     // entering and leaving the alternate screen are a matched pair here.
     ratatui::restore();
     result
 }
 
-async fn run_app(terminal: &mut DefaultTerminal, agent: &mut Agent, receiver: &mut UnboundedReceiver<AgentEvent>, modes: &mut ScreenModes) -> Result<()> {
+async fn run_app(
+    terminal: &mut DefaultTerminal,
+    agent: &mut Agent,
+    receiver: &mut UnboundedReceiver<AgentEvent>,
+    modes: &mut ScreenModes,
+) -> Result<()> {
     let mut app = App::new(&agent.model);
     let mut keys = EventStream::new();
     loop {
@@ -146,7 +191,16 @@ async fn run_app(terminal: &mut DefaultTerminal, agent: &mut Agent, receiver: &m
         }
         let prompt = app.content.submit();
         app.scroll_back = 0;
-        match run_turn(terminal, &mut app, &mut keys, receiver, modes, agent.run(prompt.trim())).await? {
+        match run_turn(
+            terminal,
+            &mut app,
+            &mut keys,
+            receiver,
+            modes,
+            agent.run(prompt.trim()),
+        )
+        .await?
+        {
             TurnOutcome::Finished(result) => app.content.finish_turn(result),
             TurnOutcome::Quit => return Ok(()),
         }
@@ -200,11 +254,18 @@ mod tests {
     use serde_json::json;
 
     fn history(app: &mut App) -> String {
-        app.rows(100).iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")
+        app.rows(100)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn assistant(app: &mut App, text: impl Into<String>) {
-        app.activity(AgentEvent { source: "main", kind: EventKind::AssistantText(text.into()) });
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::AssistantText(text.into()),
+        });
     }
 
     #[cfg(unix)]
@@ -262,23 +323,44 @@ mod tests {
             let result = async {
                 let mut modes = ScreenModes::new()?;
                 let mut app = App::default();
-                assistant(&mut app, (0..60).map(|n| format!("history {n:02}")).collect::<Vec<_>>().join("\n"));
+                assistant(
+                    &mut app,
+                    (0..60)
+                        .map(|n| format!("history {n:02}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
                 assistant(&mut app, "Blocked-read-test");
                 let mut keys = EventStream::new();
                 let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
                 let mut tools = crate::tools::ToolRegistry::new();
                 let work = async {
                     let (output, error) = tools.execute("read_file", &json!({"path": path})).await;
-                    if error { anyhow::bail!("{output}"); }
+                    if error {
+                        anyhow::bail!("{output}");
+                    }
                     Ok(output)
                 };
-                let outcome = run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, &mut modes, work).await?;
-                anyhow::ensure!(matches!(outcome, TurnOutcome::Quit), "expected Ctrl+C exit during blocked read");
+                let outcome = run_turn(
+                    &mut terminal,
+                    &mut app,
+                    &mut keys,
+                    &mut receiver,
+                    &mut modes,
+                    work,
+                )
+                .await?;
+                anyhow::ensure!(
+                    matches!(outcome, TurnOutcome::Quit),
+                    "expected Ctrl+C exit during blocked read"
+                );
                 Ok(())
-            }.await;
+            }
+            .await;
             ratatui::restore();
             result
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -286,20 +368,44 @@ mod tests {
         for presses in 0..3 {
             let mut app = App::default();
             for _ in 0..presses {
-                app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)));
+                app.handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('o'),
+                    KeyModifiers::CONTROL,
+                )));
             }
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-                name: "bash".into(), input: json!({"command":"some command"}),
-            }});
-            let output = (0..20).map(|n| format!("output {n:02}")).collect::<Vec<_>>().join("\n") + "\n[exit 7]";
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-                name: "bash".into(), output, is_error: true,
-            }});
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolStarted {
+                    name: "bash".into(),
+                    input: json!({"command":"some command"}),
+                },
+            });
+            let output = (0..20)
+                .map(|n| format!("output {n:02}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n[exit 7]";
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolFinished {
+                    name: "bash".into(),
+                    output,
+                    is_error: true,
+                },
+            });
             let text = history(&mut app);
             assert!(text.contains("• [shell] some command"));
             assert!(text.contains("[exit 7]"));
-            assert_eq!(text.contains("output 00"), presses == 2, "only Full shows the first line");
-            assert_eq!(text.contains("output 19"), presses != 0, "Concise hides output");
+            assert_eq!(
+                text.contains("output 00"),
+                presses == 2,
+                "only Full shows the first line"
+            );
+            assert_eq!(
+                text.contains("output 19"),
+                presses != 0,
+                "Concise hides output"
+            );
             assert!(!text.contains("tools:"));
         }
     }
@@ -310,15 +416,27 @@ mod tests {
             let mut app = App::default();
             let mut terminal = Terminal::new(TestBackend::new(100, 24))?;
             for _ in 0..presses {
-                app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)));
+                app.handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('o'),
+                    KeyModifiers::CONTROL,
+                )));
             }
             for command in ["first", "second"] {
-                app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-                    name: "bash".into(), input: json!({"command":command}),
-                }});
-                app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-                    name: "bash".into(), output: "output\n[exit 0]".into(), is_error: false,
-                }});
+                app.activity(AgentEvent {
+                    source: "main",
+                    kind: EventKind::ToolStarted {
+                        name: "bash".into(),
+                        input: json!({"command":command}),
+                    },
+                });
+                app.activity(AgentEvent {
+                    source: "main",
+                    kind: EventKind::ToolFinished {
+                        name: "bash".into(),
+                        output: "output\n[exit 0]".into(),
+                        is_error: false,
+                    },
+                });
                 // Rendering drains pending rows, just as it does between live events.
                 terminal.draw(|frame| app.view(frame))?;
             }
@@ -326,11 +444,21 @@ mod tests {
                 assert_eq!(app.rows(100).len(), 2, "Concise tool headers stay adjacent");
             }
             // Spacing depends on what was printed, not the current selection.
-            app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)));
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('o'),
+                KeyModifiers::CONTROL,
+            )));
             assistant(&mut app, "Here is the explanation.");
             let rows = app.rows(100);
-            let answer = rows.iter().position(|row| row.to_string() == "Here is the explanation.").unwrap();
-            assert_eq!(rows[answer - 1].to_string(), "", "missing tool-to-assistant gap after {presses} mode presses");
+            let answer = rows
+                .iter()
+                .position(|row| row.to_string() == "Here is the explanation.")
+                .unwrap();
+            assert_eq!(
+                rows[answer - 1].to_string(),
+                "",
+                "missing tool-to-assistant gap after {presses} mode presses"
+            );
             assert_ne!(rows[answer - 2].to_string(), "", "do not add a second gap");
         }
         Ok(())
@@ -346,7 +474,11 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(width, 12))?;
             terminal.draw(|frame| app.view(frame))?;
             let buffer = terminal.backend().buffer();
-            let expected = if width == 12 { vec![(0, "a"), (1, "g")] } else { vec![(0, "a")] };
+            let expected = if width == 12 {
+                vec![(0, "a"), (1, "g")]
+            } else {
+                vec![(0, "a")]
+            };
             for (y, first) in expected {
                 assert_eq!(buffer[(0, y)].symbol(), "▌");
                 assert_eq!(buffer[(2, y)].symbol(), first);
@@ -361,7 +493,10 @@ mod tests {
     fn markdown_reflows_on_resize_with_styling_and_scrolling_intact() -> Result<()> {
         use ratatui::style::Modifier;
         let mut app = App::default();
-        assistant(&mut app, "# Heading\n\n**alpha beta gamma delta epsilon zeta eta theta**\n\n```rust\n    let x = 1;\n```\n\nLast paragraph.");
+        assistant(
+            &mut app,
+            "# Heading\n\n**alpha beta gamma delta epsilon zeta eta theta**\n\n```rust\n    let x = 1;\n```\n\nLast paragraph.",
+        );
         let wide = app.rows(80);
         let narrow = app.rows(16);
         assert!(narrow.len() > wide.len());
@@ -376,7 +511,13 @@ mod tests {
         assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
         app.handle_event(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
         terminal.draw(|frame| app.view(frame))?;
-        let screen: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
         assert!(screen.contains("Last paragraph."));
         assert_eq!(app.scroll_back, 0);
         Ok(())
@@ -397,11 +538,22 @@ mod tests {
         assert_eq!(buffer[(9, 0)].fg, Color::White);
         assert!(!buffer[(9, 0)].modifier.contains(Modifier::BOLD));
         let rows = app.rows(100);
-        let user_y = rows.iter().position(|row| row.to_string() == "▌ user prompt").unwrap() as u16;
-        let assistant_y = rows.iter().position(|row| row.to_string() == "assistant answer").unwrap() as u16;
+        let user_y = rows
+            .iter()
+            .position(|row| row.to_string() == "▌ user prompt")
+            .unwrap() as u16;
+        let assistant_y = rows
+            .iter()
+            .position(|row| row.to_string() == "assistant answer")
+            .unwrap() as u16;
         assert_eq!(buffer[(2, user_y)].fg, Color::Rgb(217, 139, 92));
         assert_eq!(buffer[(0, assistant_y)].fg, Color::Reset);
-        assert!(!buffer.content.iter().any(|cell| cell.modifier.contains(Modifier::DIM)));
+        assert!(
+            !buffer
+                .content
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::DIM))
+        );
         assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
         Ok(())
     }
@@ -410,16 +562,35 @@ mod tests {
     fn input_paste_quit_and_failed_sessions_use_shared_behavior() {
         let mut app = App::default();
         let key = |code, modifiers| Event::Key(KeyEvent::new(code, modifiers));
-        assert_eq!(app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)), InputAction::None);
-        assert_eq!(app.handle_event(Event::Paste("hello\n猫\u{3}".into())), InputAction::None);
-        assert_eq!(app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)), InputAction::Submit);
+        assert_eq!(
+            app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)),
+            InputAction::None
+        );
+        assert_eq!(
+            app.handle_event(Event::Paste("hello\n猫\u{3}".into())),
+            InputAction::None
+        );
+        assert_eq!(
+            app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)),
+            InputAction::Submit
+        );
         assert_eq!(app.content.submit(), "hello 猫");
-        app.content.finish_turn(Err(anyhow::anyhow!("model failed")));
+        app.content
+            .finish_turn(Err(anyhow::anyhow!("model failed")));
         app.handle_event(Event::Paste("another prompt".into()));
-        assert_eq!(app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)), InputAction::None);
-        assert_eq!(app.handle_event(key(KeyCode::Char('c'), KeyModifiers::CONTROL)), InputAction::Quit);
+        assert_eq!(
+            app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)),
+            InputAction::None
+        );
+        assert_eq!(
+            app.handle_event(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            InputAction::Quit
+        );
         let mut empty = App::default();
-        assert_eq!(empty.handle_event(key(KeyCode::Char('d'), KeyModifiers::CONTROL)), InputAction::Quit);
+        assert_eq!(
+            empty.handle_event(key(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            InputAction::Quit
+        );
     }
 
     #[test]
@@ -434,16 +605,38 @@ mod tests {
     #[test]
     fn mouse_wheel_moves_visible_transcript_and_stops_at_bounds() -> Result<()> {
         let mut app = App::default();
-        assistant(&mut app, (0..40).map(|n| format!("row {n:02}")).collect::<Vec<_>>().join("\n\n"));
+        assistant(
+            &mut app,
+            (0..40)
+                .map(|n| format!("row {n:02}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
         let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
         let screen = |terminal: &Terminal<TestBackend>| -> String {
-            terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect()
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect()
         };
-        let wheel = |kind| Event::Mouse(MouseEvent { kind, column: 5, row: 3, modifiers: KeyModifiers::NONE });
+        let wheel = |kind| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 5,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
         terminal.draw(|frame| app.view(frame))?;
         let bottom = screen(&terminal);
         assert!(bottom.contains("row 39"));
-        assert_eq!(app.handle_event(wheel(MouseEventKind::ScrollUp)), InputAction::None);
+        assert_eq!(
+            app.handle_event(wheel(MouseEventKind::ScrollUp)),
+            InputAction::None
+        );
         terminal.draw(|frame| app.view(frame))?;
         assert_ne!(screen(&terminal), bottom);
         assert!(!screen(&terminal).contains("row 39"));
@@ -452,7 +645,9 @@ mod tests {
         assert_eq!(screen(&terminal), bottom);
         app.handle_event(wheel(MouseEventKind::ScrollDown));
         assert_eq!(app.scroll_back, 0);
-        for _ in 0..100 { app.handle_event(wheel(MouseEventKind::ScrollUp)); }
+        for _ in 0..100 {
+            app.handle_event(wheel(MouseEventKind::ScrollUp));
+        }
         terminal.draw(|frame| app.view(frame))?;
         assert!(screen(&terminal).contains("row 00"));
         app.handle_event(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
@@ -471,7 +666,13 @@ mod tests {
             terminal.draw(|frame| app.view(frame))?;
             assert!(app.scroll_back < usize::MAX);
             if width == 80 {
-                let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+                let content: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
                 assert!(content.contains("Hello from Robbie"));
             }
         }

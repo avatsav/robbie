@@ -4,9 +4,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers},
-    execute,
     cursor::Show,
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
+    execute,
     style::{Attribute, ResetColor, SetAttribute},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
@@ -22,7 +25,11 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedReceiver;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::{Agent, events::{AgentEvent, EventKind}, markdown::Markdown};
+use crate::{
+    Agent,
+    events::{AgentEvent, EventKind},
+    markdown::Markdown,
+};
 
 mod tool_display;
 
@@ -52,7 +59,6 @@ impl ToolOutputMode {
             Self::Full => Self::Concise,
         }
     }
-
 }
 
 pub(super) struct ToolOutcome {
@@ -62,13 +68,25 @@ pub(super) struct ToolOutcome {
 
 // Conversation text wraps; tool headers and preview rows stay compact and muted.
 pub(super) enum OutputLine {
-    Banner { model: String },
-    BannerHint { text: &'static str },
-    UserPrompt { text: String },
+    Banner {
+        model: String,
+    },
+    BannerHint {
+        text: &'static str,
+    },
+    UserPrompt {
+        text: String,
+    },
     Wrapped(StyledLine),
     Markdown(Markdown),
-    Tool { summary: String, outcome: ToolOutcome },
-    ToolOutput { prefix: &'static str, text: String },
+    Tool {
+        summary: String,
+        outcome: ToolOutcome,
+    },
+    ToolOutput {
+        prefix: &'static str,
+        text: String,
+    },
 }
 
 impl OutputLine {
@@ -78,13 +96,18 @@ impl OutputLine {
             Self::BannerHint { text } => banner_hint_rows(text, width),
             Self::UserPrompt { text } => user_prompt_rows(text, width),
             Self::Markdown(markdown) => markdown.rows(width),
-            Self::Wrapped((text, style)) => textwrap::wrap(text, width.max(1)).into_iter()
-                .map(|line| Line::styled(line.into_owned(), *style)).collect(),
+            Self::Wrapped((text, style)) => textwrap::wrap(text, width.max(1))
+                .into_iter()
+                .map(|line| Line::styled(line.into_owned(), *style))
+                .collect(),
             Self::Tool { summary, outcome } => vec![tool_line(summary, Some(outcome), width)],
             Self::ToolOutput { prefix, text } => {
                 let prefix = single_line(&format!("{prefix} "), width);
                 let content = single_line(text, width.saturating_sub(prefix.width()));
-                vec![Line::from(vec![prefix.fg(MUTED_CYAN), content.fg(MUTED_TEXT)])]
+                vec![Line::from(vec![
+                    prefix.fg(MUTED_CYAN),
+                    content.fg(MUTED_TEXT),
+                ])]
             }
         }
     }
@@ -141,13 +164,21 @@ impl App {
     }
 
     fn active_tool(&self) -> Option<&ToolActivity> {
-        self.active_tools.get("subagent").or_else(|| self.active_tools.get("main"))
+        self.active_tools
+            .get("subagent")
+            .or_else(|| self.active_tools.get("main"))
     }
 
     pub(super) fn banner(&mut self, model: &str) {
-        self.pending.push(OutputLine::Banner { model: model.to_string() });
-        self.pending.push(OutputLine::BannerHint { text: "Enter send · Ctrl+D/C exit · Ctrl+O cycle tool output" });
-        self.pending.push(OutputLine::BannerHint { text: "Shell commands run without approval. Use a trusted workspace." });
+        self.pending.push(OutputLine::Banner {
+            model: model.to_string(),
+        });
+        self.pending.push(OutputLine::BannerHint {
+            text: "Enter send · Ctrl+D/C exit · Ctrl+O cycle tool output",
+        });
+        self.pending.push(OutputLine::BannerHint {
+            text: "Shell commands run without approval. Use a trusted workspace.",
+        });
         self.blank();
     }
 
@@ -159,18 +190,22 @@ impl App {
     fn push(&mut self, text: impl Into<String>, style: Style) {
         let text = clean(&text.into());
         for line in text.split('\n') {
-            self.pending.push(OutputLine::Wrapped((line.to_string(), style)));
+            self.pending
+                .push(OutputLine::Wrapped((line.to_string(), style)));
         }
     }
 
     fn blank(&mut self) {
-        self.pending.push(OutputLine::Wrapped((String::new(), Style::new())));
+        self.pending
+            .push(OutputLine::Wrapped((String::new(), Style::new())));
         self.needs_text_separator = false;
     }
 
     pub(super) fn submit(&mut self) -> String {
         let prompt = std::mem::take(&mut self.input);
-        self.pending.push(OutputLine::UserPrompt { text: clean(&prompt) });
+        self.pending.push(OutputLine::UserPrompt {
+            text: clean(&prompt),
+        });
         self.blank();
         self.started = Some(Instant::now());
         self.status = "waiting for model…".into();
@@ -195,37 +230,64 @@ impl App {
         let source = event.source;
         match event.kind {
             EventKind::ModelStarted => {
-                self.status = if source == "main" { "waiting for model…".into() } else { "agent: waiting for model…".into() };
+                self.status = if source == "main" {
+                    "waiting for model…".into()
+                } else {
+                    "agent: waiting for model…".into()
+                };
             }
             EventKind::AssistantText(text) => {
-                if self.needs_text_separator { self.blank(); }
+                if self.needs_text_separator {
+                    self.blank();
+                }
                 if source != "main" {
                     // Keep the source label outside Markdown so a child's first
                     // heading, list, or code fence is still parsed as a block.
                     self.push("[agent]", Style::new());
                 }
-                self.pending.push(OutputLine::Markdown(Markdown::new(clean(&text))));
+                self.pending
+                    .push(OutputLine::Markdown(Markdown::new(clean(&text))));
                 self.blank();
             }
             EventKind::ToolStarted { name, input } => {
                 let display = tool_display::presentation(&name);
                 let label = display.label;
-                let prefix = if source == "main" { label.to_string() } else { format!("agent/{label}") };
-                let arguments = clean(&display.summary(&input)).split_whitespace().collect::<Vec<_>>().join(" ");
+                let prefix = if source == "main" {
+                    label.to_string()
+                } else {
+                    format!("agent/{label}")
+                };
+                let arguments = clean(&display.summary(&input))
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let summary = format!("[{prefix}] {arguments}");
                 self.status = format!("running {prefix}…");
-                self.active_tools.insert(source, ToolActivity { summary, input });
+                self.active_tools
+                    .insert(source, ToolActivity { summary, input });
             }
-            EventKind::ToolFinished { name, output, is_error } => {
+            EventKind::ToolFinished {
+                name,
+                output,
+                is_error,
+            } => {
                 let activity = self.active_tools.remove(source);
-                let summary = activity.as_ref().map(|tool| tool.summary.clone())
+                let summary = activity
+                    .as_ref()
+                    .map(|tool| tool.summary.clone())
                     .unwrap_or_else(|| format!("[{}]", tool_display::presentation(&name).label));
                 let footer = if name == "bash" && self.output_mode == ToolOutputMode::Concise {
                     bash_footer(&output).or_else(|| is_error.then(|| "[no exit code]".into()))
                 } else {
                     None
                 };
-                self.pending.push(OutputLine::Tool { summary, outcome: ToolOutcome { failed: is_error, footer } });
+                self.pending.push(OutputLine::Tool {
+                    summary,
+                    outcome: ToolOutcome {
+                        failed: is_error,
+                        footer,
+                    },
+                });
                 self.needs_text_separator = true;
                 match self.output_mode {
                     ToolOutputMode::Concise => {}
@@ -236,7 +298,11 @@ impl App {
                         } else if is_error {
                             self.pending.push(OutputLine::ToolOutput {
                                 prefix: "└",
-                                text: clean(&output).lines().next().unwrap_or("tool failed").to_string(),
+                                text: clean(&output)
+                                    .lines()
+                                    .next()
+                                    .unwrap_or("tool failed")
+                                    .to_string(),
                             });
                         }
                     }
@@ -246,12 +312,28 @@ impl App {
                             let input = activity.input;
                             let mut changes = Vec::new();
                             if name == "edit_file" {
-                                diff_lines(&mut changes, input["old_text"].as_str().unwrap_or(""), "- ", Style::new().fg(MUTED_RED));
-                                diff_lines(&mut changes, input["new_text"].as_str().unwrap_or(""), "+ ", Style::new().fg(MUTED_GREEN));
+                                diff_lines(
+                                    &mut changes,
+                                    input["old_text"].as_str().unwrap_or(""),
+                                    "- ",
+                                    Style::new().fg(MUTED_RED),
+                                );
+                                diff_lines(
+                                    &mut changes,
+                                    input["new_text"].as_str().unwrap_or(""),
+                                    "+ ",
+                                    Style::new().fg(MUTED_GREEN),
+                                );
                             } else if name == "write_file" {
-                                diff_lines(&mut changes, input["content"].as_str().unwrap_or(""), "+ ", Style::new().fg(MUTED_GREEN));
+                                diff_lines(
+                                    &mut changes,
+                                    input["content"].as_str().unwrap_or(""),
+                                    "+ ",
+                                    Style::new().fg(MUTED_GREEN),
+                                );
                             }
-                            self.pending.extend(changes.into_iter().map(OutputLine::Wrapped));
+                            self.pending
+                                .extend(changes.into_iter().map(OutputLine::Wrapped));
                         }
                         self.blank();
                     }
@@ -267,8 +349,12 @@ impl App {
             self.input.push_str(&clean(&text).replace('\n', " "));
             return InputAction::None;
         }
-        let Event::Key(key) = event else { return InputAction::None };
-        if key.kind == KeyEventKind::Release { return InputAction::None }
+        let Event::Key(key) = event else {
+            return InputAction::None;
+        };
+        if key.kind == KeyEventKind::Release {
+            return InputAction::None;
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
                 KeyCode::Char('c') => InputAction::Quit,
@@ -276,13 +362,16 @@ impl App {
                 KeyCode::Char('o') => {
                     self.output_mode = self.output_mode.next();
                     InputAction::None
-                },
+                }
                 _ => InputAction::None,
             };
         }
         match key.code {
             KeyCode::Enter if !self.failed && !self.input.trim().is_empty() => InputAction::Submit,
-            KeyCode::Backspace => { self.input.pop(); InputAction::None }
+            KeyCode::Backspace => {
+                self.input.pop();
+                InputAction::None
+            }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) && !c.is_control() => {
                 self.input.push(c);
                 InputAction::None
@@ -296,9 +385,16 @@ impl App {
     }
 
     pub(super) fn view_live(&self, frame: &mut Frame, area: Rect) {
-        if area.width == 0 || area.height == 0 { return }
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
         let prefix = if area.width >= 2 { "❯ " } else { "" };
-        let tail = input_tail(&self.input, area.width.saturating_sub(prefix.width() as u16).saturating_sub(1) as usize);
+        let tail = input_tail(
+            &self.input,
+            area.width
+                .saturating_sub(prefix.width() as u16)
+                .saturating_sub(1) as usize,
+        );
         let prompt = Line::from(vec![prefix.cyan(), tail.into()]);
         let prompt_y = area.bottom() - 1;
         frame.render_widget(prompt, Rect::new(area.x, prompt_y, area.width, 1));
@@ -308,14 +404,20 @@ impl App {
             // Prefer the child's current tool, then restore the parent call's
             // running row when that child tool finishes.
             if let Some(tool) = self.active_tool() {
-                frame.render_widget(tool_line(&tool.summary, None, area.width as usize), Rect::new(area.x, area.y, area.width, 1));
+                frame.render_widget(
+                    tool_line(&tool.summary, None, area.width as usize),
+                    Rect::new(area.x, area.y, area.width, 1),
+                );
             } else {
                 let status = if let Some(start) = self.started {
                     format!("{spinner} {}s · {}", start.elapsed().as_secs(), self.status)
                 } else {
                     self.status.clone()
                 };
-                frame.render_widget(Line::from(single_line(&status, area.width as usize)).fg(MUTED_TEXT), Rect::new(area.x, area.y, area.width, 1));
+                frame.render_widget(
+                    Line::from(single_line(&status, area.width as usize)).fg(MUTED_TEXT),
+                    Rect::new(area.x, area.y, area.width, 1),
+                );
             }
         }
     }
@@ -326,7 +428,8 @@ fn user_prompt_rows(text: &str, width: usize) -> Vec<Line<'static>> {
     // Wrap only the body, then add the gutter to every physical row. Reserve
     // room for wide glyphs even when the viewport is too narrow for a full gutter.
     let prefix: String = "▌ ".chars().take(width.saturating_sub(2)).collect();
-    textwrap::wrap(text, width - prefix.width()).into_iter()
+    textwrap::wrap(text, width - prefix.width())
+        .into_iter()
         .map(|part| Line::styled(format!("{prefix}{part}"), Style::new().fg(USER_ORANGE)))
         .collect()
 }
@@ -335,41 +438,60 @@ fn banner_rows(model: &str, width: usize) -> Vec<Line<'static>> {
     if width < 3 {
         return vec![Line::from(single_line("▌ robbie", width)).cyan()];
     }
-    let text = format!("robbie {} › openrouter · {}", env!("CARGO_PKG_VERSION"), clean(model).replace('\n', " "));
+    let text = format!(
+        "robbie {} › openrouter · {}",
+        env!("CARGO_PKG_VERSION"),
+        clean(model).replace('\n', " ")
+    );
     let mut brand_remaining = "robbie".len();
-    textwrap::wrap(&text, width - 2).into_iter().map(|part| {
-        // Only the ASCII brand is bold, even if a very narrow terminal wraps it.
-        let bold_len = brand_remaining.min(part.len());
-        brand_remaining -= bold_len;
-        Line::from(vec![
-            "▌ ".cyan(),
-            part[..bold_len].to_string().white().bold(),
-            part[bold_len..].to_string().white(),
-        ])
-    }).collect()
+    textwrap::wrap(&text, width - 2)
+        .into_iter()
+        .map(|part| {
+            // Only the ASCII brand is bold, even if a very narrow terminal wraps it.
+            let bold_len = brand_remaining.min(part.len());
+            brand_remaining -= bold_len;
+            Line::from(vec![
+                "▌ ".cyan(),
+                part[..bold_len].to_string().white().bold(),
+                part[bold_len..].to_string().white(),
+            ])
+        })
+        .collect()
 }
 
 fn banner_hint_rows(text: &str, width: usize) -> Vec<Line<'static>> {
     if width < 3 {
         return vec![Line::from(single_line("▌", width)).cyan()];
     }
-    textwrap::wrap(text, width - 2).into_iter().map(|part| {
-        Line::from(vec!["▌ ".cyan(), part.into_owned().fg(MUTED_TEXT)])
-    }).collect()
+    textwrap::wrap(text, width - 2)
+        .into_iter()
+        .map(|part| Line::from(vec!["▌ ".cyan(), part.into_owned().fg(MUTED_TEXT)]))
+        .collect()
 }
 
 fn tool_line(summary: &str, outcome: Option<&ToolOutcome>, width: usize) -> Line<'static> {
     let failed = outcome.is_some_and(|outcome| outcome.failed);
-    let footer = outcome.and_then(|outcome| outcome.footer.as_deref())
-        .map(|footer| format!(" {footer}")).unwrap_or_default();
+    let footer = outcome
+        .and_then(|outcome| outcome.footer.as_deref())
+        .map(|footer| format!(" {footer}"))
+        .unwrap_or_default();
     // Preserve the actual outcome even when the command itself is very long.
     let footer = input_tail(&footer, width).to_string();
     let head_width = width.saturating_sub(footer.width());
-    let marker = if failed && head_width >= 2 { "• " } else if failed && head_width == 1 { "•" } else { "" };
+    let marker = if failed && head_width >= 2 {
+        "• "
+    } else if failed && head_width == 1 {
+        "•"
+    } else {
+        ""
+    };
     let summary = single_line(summary, head_width.saturating_sub(marker.width()));
     let mut spans = vec![marker.fg(MUTED_RED)];
     if let Some((label, arguments)) = summary.split_once("] ") {
-        spans.extend([format!("{label}] ").fg(MUTED_CYAN), arguments.to_string().fg(MUTED_TEXT)]);
+        spans.extend([
+            format!("{label}] ").fg(MUTED_CYAN),
+            arguments.to_string().fg(MUTED_TEXT),
+        ]);
     } else {
         spans.push(summary.fg(MUTED_CYAN));
     }
@@ -393,28 +515,49 @@ fn bash_preview(output: &str) -> Vec<OutputLine> {
     let skip = lines.len().saturating_sub(BASH_PREVIEW_LINES);
     let mut preview = Vec::new();
     if skip > 0 {
-        preview.push(OutputLine::ToolOutput { prefix: "┌", text: "… earlier output omitted".into() });
+        preview.push(OutputLine::ToolOutput {
+            prefix: "┌",
+            text: "… earlier output omitted".into(),
+        });
     }
     for (index, line) in lines.iter().enumerate().skip(skip) {
-        let prefix = if index + 1 == lines.len() { "└" } else if index == 0 { "┌" } else { "│" };
-        preview.push(OutputLine::ToolOutput { prefix, text: line.to_string() });
+        let prefix = if index + 1 == lines.len() {
+            "└"
+        } else if index == 0 {
+            "┌"
+        } else {
+            "│"
+        };
+        preview.push(OutputLine::ToolOutput {
+            prefix,
+            text: line.to_string(),
+        });
     }
     preview
 }
 
 fn clean(text: &str) -> String {
-    text.replace('\t', "    ").chars().filter(|c| !c.is_control() || *c == '\n').collect()
+    text.replace('\t', "    ")
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .collect()
 }
 
 fn single_line(text: &str, width: usize) -> String {
     let text = clean(text).replace('\n', " ");
-    if text.width() <= width { return text }
-    if width == 0 { return String::new() }
+    if text.width() <= width {
+        return text;
+    }
+    if width == 0 {
+        return String::new();
+    }
     let mut result = String::new();
     let mut used = 0;
     for ch in text.chars() {
         let cells = ch.width().unwrap_or(0);
-        if used + cells > width - 1 { break }
+        if used + cells > width - 1 {
+            break;
+        }
         result.push(ch);
         used += cells;
     }
@@ -432,18 +575,25 @@ fn input_tail(input: &str, width: usize) -> &str {
     let mut used = 0;
     for (index, ch) in input.char_indices().rev() {
         used += ch.width().unwrap_or(0);
-        if used > width { return &input[index + ch.len_utf8()..] }
+        if used > width {
+            return &input[index + ch.len_utf8()..];
+        }
     }
     input
 }
 
 fn inline_options() -> TerminalOptions {
-    TerminalOptions { viewport: Viewport::Inline(2) }
+    TerminalOptions {
+        viewport: Viewport::Inline(2),
+    }
 }
 
 // Only unflushed output lives in memory. Inserted lines belong to the terminal's
 // normal scrollback, not to a second full-screen transcript or a mouse handler.
-fn flush_output<B: Backend>(terminal: &mut Terminal<B>, pending: &mut Vec<OutputLine>) -> Result<(), B::Error> {
+fn flush_output<B: Backend>(
+    terminal: &mut Terminal<B>,
+    pending: &mut Vec<OutputLine>,
+) -> Result<(), B::Error> {
     let width = terminal.size()?.width.max(1) as usize;
     let mut rows = Vec::new();
     for line in pending.drain(..) {
@@ -467,9 +617,14 @@ struct InlineTerminal {
 impl InlineTerminal {
     fn new() -> Result<Self> {
         let mode = NativeMode::new()?;
-        let terminal = Terminal::with_options(CrosstermBackend::new(io::stdout()), inline_options())?;
+        let terminal =
+            Terminal::with_options(CrosstermBackend::new(io::stdout()), inline_options())?;
         let size = terminal.size()?;
-        Ok(Self { terminal, size, _mode: mode })
+        Ok(Self {
+            terminal,
+            size,
+            _mode: mode,
+        })
     }
 
     fn prepare(&mut self) -> Result<()> {
@@ -480,9 +635,13 @@ impl InlineTerminal {
             // screen. Re-anchor just the live viewport instead, keeping history.
             let cursor = self.terminal.get_cursor_position()?;
             let prompt_offset = old_height.saturating_sub(1);
-            self.terminal.set_cursor_position((0, cursor.y.saturating_sub(prompt_offset)))?;
-            self.terminal.backend_mut().clear_region(ClearType::AfterCursor)?;
-            self.terminal = Terminal::with_options(CrosstermBackend::new(io::stdout()), inline_options())?;
+            self.terminal
+                .set_cursor_position((0, cursor.y.saturating_sub(prompt_offset)))?;
+            self.terminal
+                .backend_mut()
+                .clear_region(ClearType::AfterCursor)?;
+            self.terminal =
+                Terminal::with_options(CrosstermBackend::new(io::stdout()), inline_options())?;
             self.size = size;
         }
         Ok(())
@@ -502,7 +661,9 @@ impl InlineTerminal {
         let origin = self.terminal.get_frame().area().as_position();
         // Cleanup needs no terminal round-trip; clear only our live viewport.
         self.terminal.set_cursor_position(origin)?;
-        self.terminal.backend_mut().clear_region(ClearType::AfterCursor)?;
+        self.terminal
+            .backend_mut()
+            .clear_region(ClearType::AfterCursor)?;
         self.terminal.show_cursor()?;
         Ok(())
     }
@@ -535,7 +696,13 @@ impl Drop for NativeMode {
 
 fn restore_native_mode() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), DisableBracketedPaste, Show, ResetColor, SetAttribute(Attribute::Reset));
+    let _ = execute!(
+        io::stdout(),
+        DisableBracketedPaste,
+        Show,
+        ResetColor,
+        SetAttribute(Attribute::Reset)
+    );
 }
 
 pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) -> Result<()> {
@@ -545,17 +712,25 @@ pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) 
                 let mut app = App::default();
                 app.banner(&agent.model);
                 run_app(&mut terminal, &mut app, &mut agent, &mut receiver).await
-            }.await;
+            }
+            .await;
             result.and(terminal.finish())
         }
         Err(error) => Err(error),
     }
 }
 
-async fn run_app(terminal: &mut InlineTerminal, app: &mut App, agent: &mut Agent, receiver: &mut UnboundedReceiver<AgentEvent>) -> Result<()> {
+async fn run_app(
+    terminal: &mut InlineTerminal,
+    app: &mut App,
+    agent: &mut Agent,
+    receiver: &mut UnboundedReceiver<AgentEvent>,
+) -> Result<()> {
     loop {
         terminal.draw(app)?;
-        let event = next_terminal_event().await.context("terminal input failed")?;
+        let event = next_terminal_event()
+            .await
+            .context("terminal input failed")?;
         match app.handle_event(event) {
             InputAction::Quit => return Ok(()),
             InputAction::None => {}
@@ -644,16 +819,27 @@ mod tests {
         for y in 0..3 {
             assert_eq!(buffer[(0, y)].fg, Color::Cyan);
         }
-        assert!(!buffer.content.iter().any(|cell| cell.modifier.contains(Modifier::DIM)));
+        assert!(
+            !buffer
+                .content
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::DIM))
+        );
         Ok(())
     }
 
     #[test]
     fn submitted_prompt_repeats_its_gutter_on_wrapped_rows() {
-        let mut app = App { input: "alpha beta gamma".into(), ..App::default() };
+        let mut app = App {
+            input: "alpha beta gamma".into(),
+            ..App::default()
+        };
         assert_eq!(app.submit(), "alpha beta gamma");
         let rows = app.pending[0].rows(12);
-        assert_eq!(rows.iter().map(ToString::to_string).collect::<Vec<_>>(), ["▌ alpha beta", "▌ gamma"]);
+        assert_eq!(
+            rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["▌ alpha beta", "▌ gamma"]
+        );
         for row in rows {
             assert_eq!(row.style.fg, Some(USER_ORANGE));
             assert!(row.width() <= 12);
@@ -662,19 +848,29 @@ mod tests {
 
     #[test]
     fn submitted_prompt_keeps_literal_text_and_fits_tiny_widths() {
-        let mut app = App { input: "**literal**\n\n猫猫 abcdefghijklmnop\u{1b}".into(), ..App::default() };
+        let mut app = App {
+            input: "**literal**\n\n猫猫 abcdefghijklmnop\u{1b}".into(),
+            ..App::default()
+        };
         let prompt = app.submit();
-        assert!(prompt.ends_with('\u{1b}'), "display sanitizing must not change the submitted prompt");
+        assert!(
+            prompt.ends_with('\u{1b}'),
+            "display sanitizing must not change the submitted prompt"
+        );
         let output = &app.pending[0];
         let wide = output.rows(80);
-        assert_eq!(wide.iter().map(ToString::to_string).collect::<Vec<_>>(), [
-            "▌ **literal**", "▌ ", "▌ 猫猫 abcdefghijklmnop",
-        ]);
+        assert_eq!(
+            wide.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["▌ **literal**", "▌ ", "▌ 猫猫 abcdefghijklmnop",]
+        );
         for width in 0..20 {
             let rows = output.rows(width);
             assert!(rows.iter().all(|row| row.width() <= width.max(2)));
-            let body: String = rows.iter().flat_map(|row| row.to_string().chars().collect::<Vec<_>>())
-                .filter(|ch| !ch.is_whitespace() && *ch != '▌').collect();
+            let body: String = rows
+                .iter()
+                .flat_map(|row| row.to_string().chars().collect::<Vec<_>>())
+                .filter(|ch| !ch.is_whitespace() && *ch != '▌')
+                .collect();
             assert_eq!(body, "**literal**猫猫abcdefghijklmnop");
             if width >= 4 {
                 assert!(rows.iter().all(|row| row.to_string().starts_with("▌ ")));
@@ -685,7 +881,10 @@ mod tests {
 
     #[test]
     fn inline_submitted_prompt_has_an_aligned_orange_gutter_on_each_row() -> Result<()> {
-        let mut app = App { input: "alpha beta gamma".into(), ..App::default() };
+        let mut app = App {
+            input: "alpha beta gamma".into(),
+            ..App::default()
+        };
         app.submit();
         let mut terminal = Terminal::with_options(TestBackend::new(12, 12), inline_options())?;
         flush_output(&mut terminal, &mut app.pending)?;
@@ -698,7 +897,11 @@ mod tests {
             assert_eq!(buffer[(0, y)].fg, USER_ORANGE);
             assert_eq!(buffer[(2, y)].fg, USER_ORANGE);
         }
-        assert_eq!(buffer[(0, 2)].symbol(), " ", "trailing separator stays unmarked");
+        assert_eq!(
+            buffer[(0, 2)].symbol(),
+            " ",
+            "trailing separator stays unmarked"
+        );
         assert!(app.pending.is_empty());
         Ok(())
     }
@@ -738,22 +941,48 @@ mod tests {
 
     #[test]
     fn only_assistant_text_is_markdown_and_child_blocks_keep_their_label() {
-        let mut app = App { input: "**literal prompt**".into(), ..App::default() };
+        let mut app = App {
+            input: "**literal prompt**".into(),
+            ..App::default()
+        };
         app.submit();
-        assert_eq!(app.pending[0].rows(80)[0].to_string(), "▌ **literal prompt**");
+        assert_eq!(
+            app.pending[0].rows(80)[0].to_string(),
+            "▌ **literal prompt**"
+        );
         app.pending.clear();
         app.output_mode = ToolOutputMode::Full;
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "read_file".into(), output: "# literal file\n**not bold**".into(), is_error: false,
-        } });
-        let rows = app.take_output().iter().flat_map(|line| line.rows(80)).collect::<Vec<_>>();
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "read_file".into(),
+                output: "# literal file\n**not bold**".into(),
+                is_error: false,
+            },
+        });
+        let rows = app
+            .take_output()
+            .iter()
+            .flat_map(|line| line.rows(80))
+            .collect::<Vec<_>>();
         assert!(rows.iter().any(|line| line.to_string() == "# literal file"));
         assert!(rows.iter().any(|line| line.to_string() == "**not bold**"));
-        app.activity(AgentEvent { source: "subagent", kind: EventKind::AssistantText(
-            "# Child\n\n```\n    **literal**\n```\n\nhello\u{1b}[31m".into(),
-        ) });
-        let rows = app.take_output().iter().flat_map(|line| line.rows(80)).collect::<Vec<_>>();
-        let text = rows.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+        app.activity(AgentEvent {
+            source: "subagent",
+            kind: EventKind::AssistantText(
+                "# Child\n\n```\n    **literal**\n```\n\nhello\u{1b}[31m".into(),
+            ),
+        });
+        let rows = app
+            .take_output()
+            .iter()
+            .flat_map(|line| line.rows(80))
+            .collect::<Vec<_>>();
+        let text = rows
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.starts_with("[agent]\nChild\n"), "{text}");
         assert!(text.contains("    **literal**"));
         assert!(!text.contains('\u{1b}'));
@@ -764,37 +993,104 @@ mod tests {
         let mut app = App::default();
         let enter = || Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.handle_event(enter()), InputAction::None);
-        assert_eq!(app.handle_event(Event::Paste("hello\n猫\u{3}".into())), InputAction::None);
+        assert_eq!(
+            app.handle_event(Event::Paste("hello\n猫\u{3}".into())),
+            InputAction::None
+        );
         assert_eq!(app.input, "hello 猫");
         assert_eq!(app.handle_event(enter()), InputAction::Submit);
-        assert_eq!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))), InputAction::None);
+        assert_eq!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL
+            ))),
+            InputAction::None
+        );
         app.failed = true;
         assert_eq!(app.handle_event(enter()), InputAction::None);
-        assert_eq!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))), InputAction::Quit);
-        assert_eq!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))), InputAction::None);
+        assert_eq!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL
+            ))),
+            InputAction::Quit
+        );
+        assert_eq!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('o'),
+                KeyModifiers::CONTROL
+            ))),
+            InputAction::None
+        );
         assert_eq!(app.output_mode, ToolOutputMode::Relaxed);
         app.input.clear();
-        assert_eq!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))), InputAction::Quit);
-        assert_eq!(app.handle_event(Event::Mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 0, row: 0, modifiers: KeyModifiers::NONE })), InputAction::None);
+        assert_eq!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL
+            ))),
+            InputAction::Quit
+        );
+        assert_eq!(
+            app.handle_event(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE
+            })),
+            InputAction::None
+        );
         assert_eq!(input_tail("ab猫", 2), "猫");
     }
 
     #[test]
     fn ctrl_o_cycles_modes_without_rewriting_history_or_draft() -> Result<()> {
-        let mut app = App { input: "next prompt".into(), ..App::default() };
+        let mut app = App {
+            input: "next prompt".into(),
+            ..App::default()
+        };
         app.push("already printed output", Style::new());
-        let before: Vec<_> = app.pending.iter().map(|line| line.text().to_string()).collect();
+        let before: Vec<_> = app
+            .pending
+            .iter()
+            .map(|line| line.text().to_string())
+            .collect();
         let mut terminal = Terminal::with_options(TestBackend::new(80, 6), inline_options())?;
         assert_eq!(app.output_mode, ToolOutputMode::Concise);
-        for expected in [ToolOutputMode::Relaxed, ToolOutputMode::Full, ToolOutputMode::Concise] {
-            assert_eq!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))), InputAction::None);
+        for expected in [
+            ToolOutputMode::Relaxed,
+            ToolOutputMode::Full,
+            ToolOutputMode::Concise,
+        ] {
+            assert_eq!(
+                app.handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('o'),
+                    KeyModifiers::CONTROL
+                ))),
+                InputAction::None
+            );
             assert_eq!(app.output_mode, expected);
             assert_eq!(app.input, "next prompt");
-            assert_eq!(app.pending.iter().map(|line| line.text().to_string()).collect::<Vec<_>>(), before);
+            assert_eq!(
+                app.pending
+                    .iter()
+                    .map(|line| line.text().to_string())
+                    .collect::<Vec<_>>(),
+                before
+            );
             terminal.draw(|frame| app.view(frame))?;
-            let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
             assert!(text.contains("next prompt"));
-            assert!(!text.contains("tools:"), "output mode must not appear in the prompt");
+            assert!(
+                !text.contains("tools:"),
+                "output mode must not appear in the prompt"
+            );
         }
         Ok(())
     }
@@ -802,82 +1098,178 @@ mod tests {
     #[test]
     fn concise_bash_shows_exit_code_and_a_text_dot_only_on_failure() {
         for code in [0, 7] {
-            let mut app = App { output_mode: ToolOutputMode::Concise, ..App::default() };
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-                name: "bash".into(), input: json!({"command":"a very long command ".repeat(20)}),
-            }});
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-                name: "bash".into(), output: format!("hidden output\n[exit {code}]"), is_error: code != 0,
-            }});
+            let mut app = App {
+                output_mode: ToolOutputMode::Concise,
+                ..App::default()
+            };
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolStarted {
+                    name: "bash".into(),
+                    input: json!({"command":"a very long command ".repeat(20)}),
+                },
+            });
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolFinished {
+                    name: "bash".into(),
+                    output: format!("hidden output\n[exit {code}]"),
+                    is_error: code != 0,
+                },
+            });
             assert_eq!(app.pending.len(), 1);
             let rows = app.pending[0].rows(36);
-            let text: String = rows[0].spans.iter().map(|span| span.content.as_ref()).collect();
+            let text: String = rows[0]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
             assert!(text.ends_with(&format!("[exit {code}]")));
             assert!(text.contains('…'), "command must truncate before outcome");
             assert_eq!(text.starts_with("• "), code != 0);
             assert!(rows[0].width() <= 36);
-            if code != 0 { assert_eq!(rows[0].spans[0].style.fg, Some(MUTED_RED)); }
+            if code != 0 {
+                assert_eq!(rows[0].spans[0].style.fg, Some(MUTED_RED));
+            }
             for width in 0..40 {
                 assert!(app.pending[0].rows(width)[0].width() <= width);
             }
         }
         assert_eq!(bash_footer("Command timed out after 120 seconds"), None);
-        assert_eq!(bash_footer("(no output)\n[signal: 9 (SIGKILL)]"), Some("[signal: 9 (SIGKILL)]".into()));
-        let mut app = App { output_mode: ToolOutputMode::Concise, ..App::default() };
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "bash".into(), output: "Command timed out after 120 seconds".into(), is_error: true,
-        }});
-        assert!(app.pending[0].rows(40)[0].to_string().ends_with("[no exit code]"));
+        assert_eq!(
+            bash_footer("(no output)\n[signal: 9 (SIGKILL)]"),
+            Some("[signal: 9 (SIGKILL)]".into())
+        );
+        let mut app = App {
+            output_mode: ToolOutputMode::Concise,
+            ..App::default()
+        };
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "bash".into(),
+                output: "Command timed out after 120 seconds".into(),
+                is_error: true,
+            },
+        });
+        assert!(
+            app.pending[0].rows(40)[0]
+                .to_string()
+                .ends_with("[no exit code]")
+        );
     }
 
     #[test]
     fn full_bash_shows_all_returned_lines_without_preview_truncation() {
-        let mut app = App { output_mode: ToolOutputMode::Full, ..App::default() };
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "bash".into(), input: json!({"command":"some command"}),
-        }});
-        let output = (0..20).map(|n| format!("output {n:02}")).collect::<Vec<_>>().join("\n") + "\n[exit 0]";
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "bash".into(), output, is_error: false,
-        }});
+        let mut app = App {
+            output_mode: ToolOutputMode::Full,
+            ..App::default()
+        };
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "bash".into(),
+                input: json!({"command":"some command"}),
+            },
+        });
+        let output = (0..20)
+            .map(|n| format!("output {n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n[exit 0]";
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "bash".into(),
+                output,
+                is_error: false,
+            },
+        });
         assert!(app.pending.iter().any(|line| line.text() == "output 00"));
         assert!(app.pending.iter().any(|line| line.text() == "output 19"));
         assert!(app.pending.iter().any(|line| line.text() == "[exit 0]"));
-        assert!(!app.pending.iter().any(|line| line.text().contains("omitted")));
+        assert!(
+            !app.pending
+                .iter()
+                .any(|line| line.text().contains("omitted"))
+        );
     }
 
     #[test]
     fn mode_changes_while_busy_apply_to_the_next_completed_result() {
-        let mut app = App { output_mode: ToolOutputMode::Relaxed, ..App::default() };
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "read_file".into(), input: json!({"path":"Cargo.toml"}),
-        }});
-        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)));
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "read_file".into(), output: "dependencies".into(), is_error: false,
-        }});
+        let mut app = App {
+            output_mode: ToolOutputMode::Relaxed,
+            ..App::default()
+        };
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "read_file".into(),
+                input: json!({"path":"Cargo.toml"}),
+            },
+        });
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "read_file".into(),
+                output: "dependencies".into(),
+                is_error: false,
+            },
+        });
         assert!(app.pending.iter().any(|line| line.text() == "dependencies"));
         app.pending.clear();
-        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)));
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "read_file".into(), input: json!({"path":"Cargo.toml"}),
-        }});
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "read_file".into(), output: "dependencies".into(), is_error: false,
-        }});
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "read_file".into(),
+                input: json!({"path":"Cargo.toml"}),
+            },
+        });
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "read_file".into(),
+                output: "dependencies".into(),
+                is_error: false,
+            },
+        });
         assert_eq!(app.pending.len(), 1);
     }
 
     #[test]
     fn bash_shows_a_capped_tail_and_preserves_the_exit_code() {
-        let mut app = App { output_mode: ToolOutputMode::Relaxed, ..App::default() };
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "bash".into(), input: json!({"command":"some command"}),
-        }});
-        let output = (0..20).map(|n| format!("output {n:02}")).collect::<Vec<_>>().join("\n") + "\n[exit 7]";
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "bash".into(), output, is_error: true,
-        }});
+        let mut app = App {
+            output_mode: ToolOutputMode::Relaxed,
+            ..App::default()
+        };
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "bash".into(),
+                input: json!({"command":"some command"}),
+            },
+        });
+        let output = (0..20)
+            .map(|n| format!("output {n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n[exit 7]";
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "bash".into(),
+                output,
+                is_error: true,
+            },
+        });
         assert!(app.pending.iter().any(|line| line.text() == "output 19"));
         assert!(app.pending.iter().any(|line| line.text() == "[exit 7]"));
         assert!(!app.pending.iter().any(|line| line.text() == "output 00"));
@@ -888,14 +1280,27 @@ mod tests {
     fn skill_tool_has_a_readable_header_while_running_and_after_completion() {
         for source in ["main", "subagent"] {
             let mut app = App::default();
-            app.activity(AgentEvent { source, kind: EventKind::ToolStarted {
-                name: "load_skill".into(), input: json!({"name": "rust-for-kotlin"}),
-            }});
-            let expected = if source == "main" { "[skill] rust-for-kotlin" } else { "[agent/skill] rust-for-kotlin" };
+            app.activity(AgentEvent {
+                source,
+                kind: EventKind::ToolStarted {
+                    name: "load_skill".into(),
+                    input: json!({"name": "rust-for-kotlin"}),
+                },
+            });
+            let expected = if source == "main" {
+                "[skill] rust-for-kotlin"
+            } else {
+                "[agent/skill] rust-for-kotlin"
+            };
             assert_eq!(app.active_tool().unwrap().summary, expected);
-            app.activity(AgentEvent { source, kind: EventKind::ToolFinished {
-                name: "load_skill".into(), output: "Skill instructions".into(), is_error: false,
-            }});
+            app.activity(AgentEvent {
+                source,
+                kind: EventKind::ToolFinished {
+                    name: "load_skill".into(),
+                    output: "Skill instructions".into(),
+                    is_error: false,
+                },
+            });
             assert_eq!(app.pending[0].text(), expected);
             assert_eq!(app.pending[0].rows(80)[0].to_string(), expected);
         }
@@ -903,17 +1308,40 @@ mod tests {
 
     #[test]
     fn every_tool_has_one_compact_header() {
-        for name in ["bash", "read_file", "write_file", "edit_file", "todo", "sub_agent", "load_skill"] {
+        for name in [
+            "bash",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "todo",
+            "sub_agent",
+            "load_skill",
+        ] {
             for is_error in [false, true] {
                 let mut app = App::default();
                 app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
                     name: name.into(), input: json!({"command":"printf hello", "path":"file.rs", "old_text":"old", "new_text":"new"}),
                 }});
-                assert!(app.pending.is_empty(), "running {name} must stay in the live area");
-                app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-                    name: name.into(), output: "detail one\ndetail two".into(), is_error,
-                }});
-                assert_eq!(app.pending.iter().filter(|line| matches!(line, OutputLine::Tool { .. })).count(), 1, "completed {name} must produce one header");
+                assert!(
+                    app.pending.is_empty(),
+                    "running {name} must stay in the live area"
+                );
+                app.activity(AgentEvent {
+                    source: "main",
+                    kind: EventKind::ToolFinished {
+                        name: name.into(),
+                        output: "detail one\ndetail two".into(),
+                        is_error,
+                    },
+                });
+                assert_eq!(
+                    app.pending
+                        .iter()
+                        .filter(|line| matches!(line, OutputLine::Tool { .. }))
+                        .count(),
+                    1,
+                    "completed {name} must produce one header"
+                );
             }
         }
     }
@@ -921,34 +1349,69 @@ mod tests {
     #[test]
     fn conversation_has_priority_over_muted_single_line_tools() -> Result<()> {
         use ratatui::style::Modifier;
-        let mut app = App { input: "user prompt".into(), ..App::default() };
+        let mut app = App {
+            input: "user prompt".into(),
+            ..App::default()
+        };
         app.submit();
         assert_eq!(app.pending[0].rows(80)[0].style.fg, Some(USER_ORANGE));
-        assert!(!app.pending[0].rows(80)[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(
+            !app.pending[0].rows(80)[0]
+                .style
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
         app.pending.clear();
-        app.activity(AgentEvent { source: "main", kind: EventKind::AssistantText("assistant answer".into()) });
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::AssistantText("assistant answer".into()),
+        });
         assert_eq!(app.pending[0].rows(80)[0].style, Style::new());
         app.pending.clear();
         let mut terminal = Terminal::with_options(TestBackend::new(18, 6), inline_options())?;
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "bash".into(), input: json!({"command":"printf 'a long command'"}),
-        }});
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "bash".into(),
+                input: json!({"command":"printf 'a long command'"}),
+            },
+        });
         terminal.draw(|frame| app.view(frame))?;
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].fg, MUTED_CYAN);
         assert_eq!(buffer[(8, 0)].fg, MUTED_TEXT);
-        assert!(!buffer.content.iter().any(|cell| cell.modifier.contains(Modifier::DIM)));
+        assert!(
+            !buffer
+                .content
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::DIM))
+        );
         assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
         assert_eq!(buffer[(17, 0)].symbol(), "…");
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "bash".into(), output: "hello\n[exit 0]".into(), is_error: false,
-        }});
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "bash".into(),
+                output: "hello\n[exit 0]".into(),
+                is_error: false,
+            },
+        });
         assert_eq!(app.pending[0].rows(18).len(), 1);
         flush_output(&mut terminal, &mut app.pending)?;
         terminal.draw(|frame| app.view(frame))?;
-        assert!(terminal.backend().buffer().content.iter().all(|cell| cell.bg == Color::Reset));
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| cell.bg == Color::Reset)
+        );
         for width in 0..20 {
-            let row = OutputLine::ToolOutput { prefix: "└", text: "a long line with 猫".into() };
+            let row = OutputLine::ToolOutput {
+                prefix: "└",
+                text: "a long line with 猫".into(),
+            };
             assert!(row.rows(width)[0].width() <= width);
         }
         assert_eq!(single_line("猫猫猫", 4), "猫…");
@@ -959,20 +1422,45 @@ mod tests {
     fn parent_tool_stays_running_while_child_tools_complete() -> Result<()> {
         let mut terminal = Terminal::with_options(TestBackend::new(80, 6), inline_options())?;
         let mut app = App::default();
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "sub_agent".into(), input: json!({"prompt":"inspect dependencies"}),
-        }});
-        app.activity(AgentEvent { source: "subagent", kind: EventKind::ToolStarted {
-            name: "read_file".into(), input: json!({"path":"Cargo.toml"}),
-        }});
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "sub_agent".into(),
+                input: json!({"prompt":"inspect dependencies"}),
+            },
+        });
+        app.activity(AgentEvent {
+            source: "subagent",
+            kind: EventKind::ToolStarted {
+                name: "read_file".into(),
+                input: json!({"path":"Cargo.toml"}),
+            },
+        });
         terminal.draw(|frame| app.view(frame))?;
-        let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
         assert!(text.contains("[agent/read] Cargo.toml"));
-        app.activity(AgentEvent { source: "subagent", kind: EventKind::ToolFinished {
-            name: "read_file".into(), output: "dependencies".into(), is_error: false,
-        }});
+        app.activity(AgentEvent {
+            source: "subagent",
+            kind: EventKind::ToolFinished {
+                name: "read_file".into(),
+                output: "dependencies".into(),
+                is_error: false,
+            },
+        });
         terminal.draw(|frame| app.view(frame))?;
-        let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
         assert!(text.contains("[sub agent] inspect dependencies"));
         assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Reset);
         assert_eq!(app.pending.len(), 1);
@@ -981,32 +1469,75 @@ mod tests {
 
     #[test]
     fn reads_show_their_contents_only_in_full_mode() {
-        for mode in [ToolOutputMode::Concise, ToolOutputMode::Relaxed, ToolOutputMode::Full] {
-            let mut app = App { output_mode: mode, ..App::default() };
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-                name: "read_file".into(), input: json!({"path":"Cargo.toml"}),
-            }});
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-                name: "read_file".into(), output: "file contents".into(), is_error: false,
-            }});
+        for mode in [
+            ToolOutputMode::Concise,
+            ToolOutputMode::Relaxed,
+            ToolOutputMode::Full,
+        ] {
+            let mut app = App {
+                output_mode: mode,
+                ..App::default()
+            };
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolStarted {
+                    name: "read_file".into(),
+                    input: json!({"path":"Cargo.toml"}),
+                },
+            });
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolFinished {
+                    name: "read_file".into(),
+                    output: "file contents".into(),
+                    is_error: false,
+                },
+            });
             assert_eq!(app.pending[0].text(), "[read] Cargo.toml");
-            assert_eq!(app.pending.iter().any(|line| line.text().contains("file contents")), mode == ToolOutputMode::Full);
+            assert_eq!(
+                app.pending
+                    .iter()
+                    .any(|line| line.text().contains("file contents")),
+                mode == ToolOutputMode::Full
+            );
         }
     }
 
     #[test]
     fn edit_details_follow_the_output_mode() {
-        for mode in [ToolOutputMode::Concise, ToolOutputMode::Relaxed, ToolOutputMode::Full] {
-            let mut app = App { output_mode: mode, ..App::default() };
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-                name: "edit_file".into(), input: json!({"path":"a.rs", "old_text":"old", "new_text":"new"}),
-            }});
+        for mode in [
+            ToolOutputMode::Concise,
+            ToolOutputMode::Relaxed,
+            ToolOutputMode::Full,
+        ] {
+            let mut app = App {
+                output_mode: mode,
+                ..App::default()
+            };
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolStarted {
+                    name: "edit_file".into(),
+                    input: json!({"path":"a.rs", "old_text":"old", "new_text":"new"}),
+                },
+            });
             assert!(app.pending.is_empty());
-            app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-                name: "edit_file".into(), output: "File edited".into(), is_error: false,
-            }});
-            assert_eq!(app.pending.iter().any(|line| line.text() == "  - old"), mode == ToolOutputMode::Full);
-            assert_eq!(app.pending.iter().any(|line| line.text() == "  + new"), mode == ToolOutputMode::Full);
+            app.activity(AgentEvent {
+                source: "main",
+                kind: EventKind::ToolFinished {
+                    name: "edit_file".into(),
+                    output: "File edited".into(),
+                    is_error: false,
+                },
+            });
+            assert_eq!(
+                app.pending.iter().any(|line| line.text() == "  - old"),
+                mode == ToolOutputMode::Full
+            );
+            assert_eq!(
+                app.pending.iter().any(|line| line.text() == "  + new"),
+                mode == ToolOutputMode::Full
+            );
         }
     }
 
@@ -1014,12 +1545,22 @@ mod tests {
     fn output_goes_to_native_scrollback_and_is_not_reinserted() -> Result<()> {
         let mut terminal = Terminal::with_options(TestBackend::new(30, 6), inline_options())?;
         let mut app = App::default();
-        app.push((0..30).map(|n| format!("history {n:02}")).collect::<Vec<_>>().join("\n"), Style::new());
+        app.push(
+            (0..30)
+                .map(|n| format!("history {n:02}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Style::new(),
+        );
         flush_output(&mut terminal, &mut app.pending)?;
         terminal.draw(|frame| app.view(frame))?;
         assert!(app.pending.is_empty());
         let scrollback = terminal.backend().scrollback().clone();
-        let text: String = scrollback.content.iter().map(|cell| cell.symbol()).collect();
+        let text: String = scrollback
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
         assert!(text.contains("history 00"));
         flush_output(&mut terminal, &mut app.pending)?;
         terminal.draw(|frame| app.view(frame))?;
@@ -1031,14 +1572,26 @@ mod tests {
     fn inline_ui_keeps_existing_shell_output() -> Result<()> {
         let mut backend = TestBackend::new(80, 24);
         let existing = ratatui::buffer::Buffer::with_lines(["existing shell output"]);
-        backend.draw(existing.content.iter().enumerate().map(|(x, cell)| (x as u16, 0, cell)))?;
+        backend.draw(
+            existing
+                .content
+                .iter()
+                .enumerate()
+                .map(|(x, cell)| (x as u16, 0, cell)),
+        )?;
         backend.set_cursor_position((0, 2))?;
         let mut terminal = Terminal::with_options(backend, inline_options())?;
         let mut app = App::default();
         app.banner("test/model");
         flush_output(&mut terminal, &mut app.pending)?;
         terminal.draw(|frame| app.view(frame))?;
-        let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
         assert!(text.starts_with("existing shell output"));
         assert!(text.contains("▌ robbie"));
         assert!(text.contains("❯"));
@@ -1048,22 +1601,41 @@ mod tests {
 
     #[test]
     fn failed_edits_show_errors_not_success_previews() {
-        let mut app = App { output_mode: ToolOutputMode::Relaxed, ..App::default() };
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolStarted {
-            name: "edit_file".into(), input: json!({"path":"a.rs", "old_text":"old", "new_text":"new"}),
-        }});
-        app.activity(AgentEvent { source: "main", kind: EventKind::ToolFinished {
-            name: "edit_file".into(), output: "old_text did not match".into(), is_error: true,
-        }});
+        let mut app = App {
+            output_mode: ToolOutputMode::Relaxed,
+            ..App::default()
+        };
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolStarted {
+                name: "edit_file".into(),
+                input: json!({"path":"a.rs", "old_text":"old", "new_text":"new"}),
+            },
+        });
+        app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::ToolFinished {
+                name: "edit_file".into(),
+                output: "old_text did not match".into(),
+                is_error: true,
+            },
+        });
         assert_eq!(app.pending.len(), 2);
         assert_eq!(app.pending[0].text(), "[edit] a.rs");
-        assert!(app.pending.iter().any(|line| line.text().contains("old_text did not match")));
+        assert!(
+            app.pending
+                .iter()
+                .any(|line| line.text().contains("old_text did not match"))
+        );
         assert!(!app.pending.iter().any(|line| line.text() == "  + new"));
     }
 
     #[test]
     fn finishing_a_turn_preserves_the_next_draft_and_rejects_failed_sessions() {
-        let mut app = App { input: "first prompt".into(), ..App::default() };
+        let mut app = App {
+            input: "first prompt".into(),
+            ..App::default()
+        };
         assert_eq!(app.submit(), "first prompt");
         assert!(app.started.is_some());
         app.handle_event(Event::Paste("next draft".into()));
@@ -1072,15 +1644,29 @@ mod tests {
         assert!(app.started.is_none());
         app.finish_turn(Err(anyhow::anyhow!("request failed")));
         assert!(app.failed);
-        assert_eq!(app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))), InputAction::None);
-        assert!(app.pending.iter().any(|line| line.text().contains("request failed")));
+        assert_eq!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE
+            ))),
+            InputAction::None
+        );
+        assert!(
+            app.pending
+                .iter()
+                .any(|line| line.text().contains("request failed"))
+        );
     }
 
     #[test]
     fn prompt_fits_tiny_and_normal_viewports() -> Result<()> {
         for (width, height) in [(80, 24), (10, 5), (1, 1)] {
-            let mut terminal = Terminal::with_options(TestBackend::new(width, height), inline_options())?;
-            let mut app = App { input: "hello猫".into(), ..App::default() };
+            let mut terminal =
+                Terminal::with_options(TestBackend::new(width, height), inline_options())?;
+            let mut app = App {
+                input: "hello猫".into(),
+                ..App::default()
+            };
             app.push("hello\u{1b}[31m\r\nworld", Style::new());
             assert!(!app.pending[0].text().contains('\u{1b}'));
             flush_output(&mut terminal, &mut app.pending)?;
@@ -1144,20 +1730,37 @@ mod tests {
             let path = std::env::var("ROBBIE_TEST_FIFO")?;
             let mut terminal = InlineTerminal::new()?;
             let result = async {
-                let mut app = App { started: Some(Instant::now()), status: "Blocked read test".into(), ..App::default() };
-                app.push((0..60).map(|n| format!("history {n:02}")).collect::<Vec<_>>().join("\n"), Style::new());
+                let mut app = App {
+                    started: Some(Instant::now()),
+                    status: "Blocked read test".into(),
+                    ..App::default()
+                };
+                app.push(
+                    (0..60)
+                        .map(|n| format!("history {n:02}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    Style::new(),
+                );
                 let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
                 let mut tools = crate::tools::ToolRegistry::new();
                 let work = async {
                     let (output, error) = tools.execute("read_file", &json!({"path":path})).await;
-                    if error { anyhow::bail!("{output}"); }
+                    if error {
+                        anyhow::bail!("{output}");
+                    }
                     Ok(output)
                 };
                 let outcome = run_turn(&mut terminal, &mut app, &mut receiver, work).await?;
-                anyhow::ensure!(matches!(outcome, TurnOutcome::Quit), "expected Ctrl+C exit during blocked read");
+                anyhow::ensure!(
+                    matches!(outcome, TurnOutcome::Quit),
+                    "expected Ctrl+C exit during blocked read"
+                );
                 Ok(())
-            }.await;
+            }
+            .await;
             result.and(terminal.finish())
-        }).unwrap();
+        })
+        .unwrap();
     }
 }

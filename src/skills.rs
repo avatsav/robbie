@@ -29,12 +29,18 @@ impl SkillRegistry {
     // on a blocking worker rather than the UI executor.
     pub fn scan(directory: &Path) -> Result<Self> {
         match std::fs::metadata(directory) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
             Err(error) => return Err(error).context("cannot inspect skills directory"),
-            Ok(metadata) if !metadata.is_dir() => bail!("skills path is not a directory: {}", directory.display()),
+            Ok(metadata) if !metadata.is_dir() => {
+                bail!("skills path is not a directory: {}", directory.display())
+            }
             Ok(_) => {}
         }
-        let directory = directory.canonicalize().context("cannot resolve skills directory")?;
+        let directory = directory
+            .canonicalize()
+            .context("cannot resolve skills directory")?;
         let mut registry = Self::default();
         // Do not follow symlinks. References/scripts can live beside SKILL.md;
         // only regular SKILL.md files are loaded here.
@@ -50,37 +56,64 @@ impl SkillRegistry {
                 .with_context(|| format!("invalid skill {}", path.display()))?;
             let parent = path.parent().context("skill has no parent directory")?;
             let name = metadata.name.unwrap_or_else(|| {
-                parent.file_name().unwrap_or_default().to_string_lossy().into_owned()
+                parent
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
             });
             let name = name.trim().to_string();
             if name.is_empty() || name.chars().any(char::is_control) {
                 bail!("invalid skill name in {}", path.display());
             }
             if let Some(previous) = registry.skills.get(&name) {
-                bail!("duplicate skill {name:?}: {} and {}", previous.directory.display(), parent.display());
+                bail!(
+                    "duplicate skill {name:?}: {} and {}",
+                    previous.directory.display(),
+                    parent.display()
+                );
             }
-            registry.skills.insert(name, SkillDocument {
-                description: metadata.description.split_whitespace().collect::<Vec<_>>().join(" "),
-                directory: parent.to_path_buf(),
-                body,
-            });
+            registry.skills.insert(
+                name,
+                SkillDocument {
+                    description: metadata
+                        .description
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    directory: parent.to_path_buf(),
+                    body,
+                },
+            );
         }
         Ok(registry)
     }
 
     pub fn describe_available(&self) -> String {
-        self.skills.iter().map(|(name, skill)| {
-            let description = if skill.description.is_empty() { "(no description)" } else { &skill.description };
-            format!("- {name}: {description}")
-        }).collect::<Vec<_>>().join("\n")
+        self.skills
+            .iter()
+            .map(|(name, skill)| {
+                let description = if skill.description.is_empty() {
+                    "(no description)"
+                } else {
+                    &skill.description
+                };
+                format!("- {name}: {description}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn load(&self, name: &str) -> Result<String> {
         // Exact registry lookup, not a path supplied by the model.
-        let skill = self.skills.get(name).with_context(|| format!("unknown skill: {name}"))?;
+        let skill = self
+            .skills
+            .get(name)
+            .with_context(|| format!("unknown skill: {name}"))?;
         Ok(format!(
             "Skill: {name}\nBase directory: {}\nResolve relative references against this directory.\n\n{}",
-            skill.directory.display(), skill.body,
+            skill.directory.display(),
+            skill.body,
         ))
     }
 }
@@ -135,7 +168,12 @@ mod tests {
 
     #[test]
     fn rejects_unclosed_or_invalid_metadata() {
-        for text in ["---", "---\nname: missing", "---\nname: [bad\n---\nbody", "---\nname: [not, a, string]\n---\nbody"] {
+        for text in [
+            "---",
+            "---\nname: missing",
+            "---\nname: [bad\n---\nbody",
+            "---\nname: [not, a, string]\n---\nbody",
+        ] {
             assert!(parse_document(text).is_err(), "{text}");
         }
     }
@@ -144,13 +182,30 @@ mod tests {
     fn discovers_nested_skills_and_separates_summaries_from_bodies() {
         let root = tempfile::tempdir().unwrap();
         write_skill(root.path(), "z/fallback", "Secret fallback instructions.");
-        write_skill(root.path(), "a", "---\nname: named\ndescription: Explain ownership.\n---\nSecret named instructions.");
+        write_skill(
+            root.path(),
+            "a",
+            "---\nname: named\ndescription: Explain ownership.\n---\nSecret named instructions.",
+        );
         std::fs::write(root.path().join("README.md"), "not a skill").unwrap();
         let registry = SkillRegistry::scan(root.path()).unwrap();
-        assert_eq!(registry.describe_available(), "- fallback: (no description)\n- named: Explain ownership.");
+        assert_eq!(
+            registry.describe_available(),
+            "- fallback: (no description)\n- named: Explain ownership."
+        );
         let loaded = registry.load("named").unwrap();
         assert!(loaded.contains("Secret named instructions."));
-        assert!(loaded.contains(&root.path().canonicalize().unwrap().join("a").display().to_string()));
+        assert!(
+            loaded.contains(
+                &root
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .join("a")
+                    .display()
+                    .to_string()
+            )
+        );
         assert!(!loaded.contains("description:"));
         assert!(registry.load("../a/SKILL.md").is_err());
         // The registry is a startup snapshot, not a live file read.
@@ -161,7 +216,12 @@ mod tests {
     #[test]
     fn missing_directory_is_empty_but_bad_paths_and_duplicates_fail() {
         let root = tempfile::tempdir().unwrap();
-        assert!(SkillRegistry::scan(&root.path().join("absent")).unwrap().describe_available().is_empty());
+        assert!(
+            SkillRegistry::scan(&root.path().join("absent"))
+                .unwrap()
+                .describe_available()
+                .is_empty()
+        );
         write_skill(root.path(), "first", "---\nname: duplicate\n---\nfirst");
         assert!(SkillRegistry::scan(&root.path().join("first/SKILL.md")).is_err());
         write_skill(root.path(), "second", "---\nname: duplicate\n---\nsecond");

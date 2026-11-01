@@ -33,7 +33,9 @@ impl SubAgent {
 
 #[async_trait]
 impl Tool for SubAgent {
-    fn name(&self) -> &'static str { "sub_agent" }
+    fn name(&self) -> &'static str {
+        "sub_agent"
+    }
 
     fn schema(&self) -> Value {
         json!({
@@ -48,7 +50,12 @@ impl Tool for SubAgent {
     }
 
     async fn execute(&mut self, input: &Value) -> (String, bool) {
-        let Some(prompt) = input.get("prompt").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else {
+        let Some(prompt) = input
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
             return ("Error: prompt must be a non-empty string".to_string(), true);
         };
         let mut child = self.new_child();
@@ -65,18 +72,35 @@ mod tests {
 
     fn sub_agent() -> SubAgent {
         let (events, _) = tokio::sync::mpsc::unbounded_channel();
-        SubAgent { client: reqwest::Client::new(), api_key: "test".into(), model: "test/model".into(), provider: None, events, skills: Arc::new(SkillRegistry::default()) }
+        SubAgent {
+            client: reqwest::Client::new(),
+            api_key: "test".into(),
+            model: "test/model".into(),
+            provider: None,
+            events,
+            skills: Arc::new(SkillRegistry::default()),
+        }
     }
 
     #[test]
     fn children_have_fresh_context_and_limited_tools() {
         let tool = sub_agent();
         let mut first = tool.new_child();
-        first.messages.push(json!({"role": "user", "content": "private"}));
+        first
+            .messages
+            .push(json!({"role": "user", "content": "private"}));
         let second = tool.new_child();
         assert!(second.messages.is_empty());
-        let names: Vec<String> = second.tools.schemas().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names, ["bash", "edit_file", "load_skill", "read_file", "write_file"]);
+        let names: Vec<String> = second
+            .tools
+            .schemas()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            ["bash", "edit_file", "load_skill", "read_file", "write_file"]
+        );
     }
 
     #[tokio::test]
@@ -87,20 +111,47 @@ mod tests {
         tool.skills = Arc::new(SkillRegistry::scan(root.path()).unwrap());
         let mut first = tool.new_child();
         assert!(Arc::ptr_eq(&tool.skills, &first.tools.skills));
-        assert!(first.system_prompt().contains("ownership: Explain Rust ownership."));
-        assert!(!first.system_prompt().contains("Secret ownership instructions."));
-        let (content, error) = first.tools.execute("load_skill", &json!({"name": "ownership"})).await;
+        assert!(
+            first
+                .system_prompt()
+                .contains("ownership: Explain Rust ownership.")
+        );
+        assert!(
+            !first
+                .system_prompt()
+                .contains("Secret ownership instructions.")
+        );
+        let (content, error) = first
+            .tools
+            .execute("load_skill", &json!({"name": "ownership"}))
+            .await;
         assert!(!error);
         assert!(content.contains("Secret ownership instructions."));
-        first.messages.push(json!({"role": "user", "content": content}));
+        first
+            .messages
+            .push(json!({"role": "user", "content": content}));
         let second = tool.new_child();
         assert!(second.messages.is_empty());
         assert_eq!(first.system_prompt(), second.system_prompt());
 
         let mut parent = ToolRegistry::with_skills(Arc::clone(&tool.skills));
-        parent.enable_sub_agent(tool.client.clone(), tool.api_key.clone(), tool.model.clone(), None, tool.events.clone());
-        assert_eq!(parent.skill_descriptions(), second.tools.skill_descriptions());
-        assert!(parent.schemas().iter().any(|schema| schema["name"] == "sub_agent"));
+        parent.enable_sub_agent(
+            tool.client.clone(),
+            tool.api_key.clone(),
+            tool.model.clone(),
+            None,
+            tool.events.clone(),
+        );
+        assert_eq!(
+            parent.skill_descriptions(),
+            second.tools.skill_descriptions()
+        );
+        assert!(
+            parent
+                .schemas()
+                .iter()
+                .any(|schema| schema["name"] == "sub_agent")
+        );
     }
 
     #[test]
@@ -112,7 +163,9 @@ mod tests {
         child.emit(crate::events::EventKind::AssistantText("Hello".into()));
         let event = receiver.try_recv().unwrap();
         assert_eq!(event.source, "subagent");
-        assert!(matches!(event.kind, crate::events::EventKind::AssistantText(text) if text == "Hello"));
+        assert!(
+            matches!(event.kind, crate::events::EventKind::AssistantText(text) if text == "Hello")
+        );
         assert!(receiver.try_recv().is_err());
     }
 
@@ -126,8 +179,19 @@ mod tests {
     async fn parent_registry_exposes_and_dispatches_sub_agent() {
         let mut registry = ToolRegistry::new();
         let (events, _) = tokio::sync::mpsc::unbounded_channel();
-        registry.enable_sub_agent(reqwest::Client::new(), "test".into(), "test/model".into(), None, events);
-        assert!(registry.schemas().iter().any(|schema| schema["name"] == "sub_agent"));
+        registry.enable_sub_agent(
+            reqwest::Client::new(),
+            "test".into(),
+            "test/model".into(),
+            None,
+            events,
+        );
+        assert!(
+            registry
+                .schemas()
+                .iter()
+                .any(|schema| schema["name"] == "sub_agent")
+        );
         let (output, is_error) = registry.execute("sub_agent", &json!({})).await;
         assert!(is_error);
         assert!(output.contains("prompt must be a non-empty string"));

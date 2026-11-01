@@ -44,7 +44,10 @@ impl ToolRegistry {
 
     // Children can use workspace tools and skills, but cannot delegate recursively.
     fn child(skills: Arc<SkillRegistry>) -> Self {
-        let mut registry = Self { tools: HashMap::new(), skills: Arc::clone(&skills) };
+        let mut registry = Self {
+            tools: HashMap::new(),
+            skills: Arc::clone(&skills),
+        };
         registry.register(Box::new(load_skill::LoadSkill { skills }));
         registry.register(Box::new(Bash));
         registry.register(Box::new(files::ReadFile));
@@ -53,8 +56,22 @@ impl ToolRegistry {
         registry
     }
 
-    pub fn enable_sub_agent(&mut self, client: reqwest::Client, api_key: String, model: String, provider: Option<String>, events: crate::events::EventSender) {
-        self.register(Box::new(sub_agent::SubAgent { client, api_key, model, provider, events, skills: Arc::clone(&self.skills) }));
+    pub fn enable_sub_agent(
+        &mut self,
+        client: reqwest::Client,
+        api_key: String,
+        model: String,
+        provider: Option<String>,
+        events: crate::events::EventSender,
+    ) {
+        self.register(Box::new(sub_agent::SubAgent {
+            client,
+            api_key,
+            model,
+            provider,
+            events,
+            skills: Arc::clone(&self.skills),
+        }));
     }
 
     fn register(&mut self, tool: Box<dyn Tool>) {
@@ -113,8 +130,16 @@ impl Tool for Bash {
                 let truncated = tail.len() > 50_000;
                 tail.truncate(50_000);
                 let result: String = tail.into_iter().rev().collect();
-                let result = if result.is_empty() { "(no output)".to_string() } else { result };
-                let result = if truncated { format!("[earlier output truncated]\n{result}") } else { result };
+                let result = if result.is_empty() {
+                    "(no output)".to_string()
+                } else {
+                    result
+                };
+                let result = if truncated {
+                    format!("[earlier output truncated]\n{result}")
+                } else {
+                    result
+                };
                 let status = match output.status.code() {
                     Some(code) => format!("[exit {code}]"),
                     None => format!("[{}]", output.status),
@@ -135,10 +160,14 @@ mod tests {
     async fn registry_exposes_and_dispatches_bash() {
         let mut registry = ToolRegistry::new();
         assert_eq!(registry.schemas()[0]["name"], "bash");
-        let (output, error) = registry.execute("bash", &json!({"command": "printf hello"})).await;
+        let (output, error) = registry
+            .execute("bash", &json!({"command": "printf hello"}))
+            .await;
         assert!(output.contains("hello"));
         assert!(!error);
-        let (_, error) = registry.execute("bash", &json!({"command": "exit 1"})).await;
+        let (_, error) = registry
+            .execute("bash", &json!({"command": "exit 1"}))
+            .await;
         assert!(error);
     }
 
@@ -152,7 +181,9 @@ mod tests {
         assert!(output.starts_with("[earlier output truncated]"));
         assert!(!output.contains("START"));
         assert!(output.ends_with("TAIL\n[exit 7]"));
-        let (output, is_error) = registry.execute("bash", &json!({"command":"printf hello"})).await;
+        let (output, is_error) = registry
+            .execute("bash", &json!({"command":"printf hello"}))
+            .await;
         assert!(!is_error);
         assert_eq!(output, "hello\n[exit 0]");
     }
@@ -161,8 +192,12 @@ mod tests {
 
     #[async_trait]
     impl Tool for Counter {
-        fn name(&self) -> &'static str { "counter" }
-        fn schema(&self) -> Value { json!({"name": self.name()}) }
+        fn name(&self) -> &'static str {
+            "counter"
+        }
+        fn schema(&self) -> Value {
+            json!({"name": self.name()})
+        }
         async fn execute(&mut self, _input: &Value) -> (String, bool) {
             self.0 += 1;
             (self.0.to_string(), false)

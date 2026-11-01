@@ -46,31 +46,55 @@ impl TodoTool {
         let action = input["action"].as_str().context("action is required")?;
         match action {
             "add" => {
-                let content = input["content"].as_str().context("content is required")?.trim();
-                if content.is_empty() { bail!("content must not be empty"); }
+                let content = input["content"]
+                    .as_str()
+                    .context("content is required")?
+                    .trim();
+                if content.is_empty() {
+                    bail!("content must not be empty");
+                }
                 self.last_id = self.last_id.checked_add(1).context("todo IDs exhausted")?;
-                self.items.push(TodoItem { id: self.last_id, content: content.to_string(), status: Status::Pending });
+                self.items.push(TodoItem {
+                    id: self.last_id,
+                    content: content.to_string(),
+                    status: Status::Pending,
+                });
             }
             "update" => {
-                let id = input["id"].as_u64().context("id must be a non-negative integer")?;
-                let status = Status::parse(input["status"].as_str().context("status is required")?)?;
-                let item = self.items.iter_mut().find(|item| item.id == id).context("todo not found")?;
+                let id = input["id"]
+                    .as_u64()
+                    .context("id must be a non-negative integer")?;
+                let status =
+                    Status::parse(input["status"].as_str().context("status is required")?)?;
+                let item = self
+                    .items
+                    .iter_mut()
+                    .find(|item| item.id == id)
+                    .context("todo not found")?;
                 item.status = status;
             }
             "list" => {}
             "clear" => self.items.clear(),
             _ => bail!("unknown action: {action}"),
         }
-        let items: Vec<Value> = self.items.iter().map(|item| json!({
-            "id": item.id, "content": item.content, "status": item.status.as_str()
-        })).collect();
+        let items: Vec<Value> = self
+            .items
+            .iter()
+            .map(|item| {
+                json!({
+                    "id": item.id, "content": item.content, "status": item.status.as_str()
+                })
+            })
+            .collect();
         Ok(json!({"todos": items}).to_string())
     }
 }
 
 #[async_trait]
 impl Tool for TodoTool {
-    fn name(&self) -> &'static str { "todo" }
+    fn name(&self) -> &'static str {
+        "todo"
+    }
 
     fn schema(&self) -> Value {
         json!({
@@ -105,28 +129,70 @@ mod tests {
     #[tokio::test]
     async fn todo_actions_preserve_state_in_registry() {
         let mut registry = ToolRegistry::new();
-        assert!(registry.schemas().iter().any(|schema| schema["name"] == "todo"));
-        let (output, error) = registry.execute("todo", &json!({"action": "add", "content": "Inspect project"})).await;
+        assert!(
+            registry
+                .schemas()
+                .iter()
+                .any(|schema| schema["name"] == "todo")
+        );
+        let (output, error) = registry
+            .execute(
+                "todo",
+                &json!({"action": "add", "content": "Inspect project"}),
+            )
+            .await;
         assert!(!error);
-        assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["status"], "pending");
-        let (output, error) = registry.execute("todo", &json!({"action": "update", "id": 1, "status": "completed"})).await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["status"],
+            "pending"
+        );
+        let (output, error) = registry
+            .execute(
+                "todo",
+                &json!({"action": "update", "id": 1, "status": "completed"}),
+            )
+            .await;
         assert!(!error);
-        assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["status"], "completed");
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["status"],
+            "completed"
+        );
         let (output, _) = registry.execute("todo", &json!({"action": "list"})).await;
-        assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["content"], "Inspect project");
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["content"],
+            "Inspect project"
+        );
         let (output, _) = registry.execute("todo", &json!({"action": "clear"})).await;
-        assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["todos"], json!([]));
-        let (output, _) = registry.execute("todo", &json!({"action": "add", "content": "Next"})).await;
-        assert_eq!(serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["id"], 2);
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap()["todos"],
+            json!([])
+        );
+        let (output, _) = registry
+            .execute("todo", &json!({"action": "add", "content": "Next"}))
+            .await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap()["todos"][0]["id"],
+            2
+        );
     }
 
     #[test]
     fn invalid_actions_do_not_change_state() {
         let mut tool = TodoTool::default();
-        tool.apply(&json!({"action":"add", "content":"First"})).unwrap();
-        assert!(tool.apply(&json!({"action":"add", "content":"  "})).is_err());
-        assert!(tool.apply(&json!({"action":"update", "id":1, "status":"invalid"})).is_err());
-        assert!(tool.apply(&json!({"action":"update", "id":99, "status":"completed"})).is_err());
+        tool.apply(&json!({"action":"add", "content":"First"}))
+            .unwrap();
+        assert!(
+            tool.apply(&json!({"action":"add", "content":"  "}))
+                .is_err()
+        );
+        assert!(
+            tool.apply(&json!({"action":"update", "id":1, "status":"invalid"}))
+                .is_err()
+        );
+        assert!(
+            tool.apply(&json!({"action":"update", "id":99, "status":"completed"}))
+                .is_err()
+        );
         assert!(tool.apply(&json!({"action":"unknown"})).is_err());
         let output = tool.apply(&json!({"action":"list"})).unwrap();
         let items: Value = serde_json::from_str(&output).unwrap();
