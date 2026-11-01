@@ -1,4 +1,3 @@
-use std::io::{self, Write};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -132,24 +131,17 @@ fn response_text(blocks: &[Value]) -> String {
         .join("\n")
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Frontend {
-    Fullscreen,
-    Inline,
-    Console,
-}
-
-fn select_frontend(args: &[String]) -> Frontend {
-    if args.iter().any(|arg| arg == "--console") {
-        Frontend::Console
-    } else if args.iter().any(|arg| arg == "--inline") {
-        Frontend::Inline
-    } else {
-        Frontend::Fullscreen
+fn validate_args(args: &[String]) -> Result<()> {
+    if let Some(arg) = args.first() {
+        bail!(
+            "Unexpected argument {arg:?}. Run Robbie without arguments to start the full-screen UI."
+        );
     }
+    Ok(())
 }
 
 fn main() -> Result<()> {
+    validate_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
     run_with_runtime(run())
 }
 
@@ -172,7 +164,7 @@ async fn run() -> Result<()> {
             .await
             .context("skill scanning task failed")??,
     );
-    let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut agent = Agent {
         client: reqwest::Client::new(),
         api_key: std::env::var("OPENROUTER_API_KEY").context("OPENROUTER_API_KEY is not set")?,
@@ -194,48 +186,7 @@ async fn run() -> Result<()> {
         agent.events.clone(),
     );
 
-    match select_frontend(&std::env::args().skip(1).collect::<Vec<_>>()) {
-        Frontend::Fullscreen => return fullscreen::run(agent, receiver).await,
-        Frontend::Inline => return ui::run(agent, receiver).await,
-        Frontend::Console => {}
-    }
-
-    println!(
-        "Warning: the agent can run shell commands without asking. Use only in a trusted environment. Type exit() to quit."
-    );
-    loop {
-        print!("\nYou: ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input)? == 0 || input.trim() == "exit()" {
-            break;
-        }
-        if !input.trim().is_empty() {
-            run_console(&mut agent, input.trim(), &mut receiver).await?;
-        }
-    }
-    Ok(())
-}
-
-// Drive the agent and display events concurrently, then drain any final events
-// before showing the next blocking stdin prompt.
-async fn run_console(
-    agent: &mut Agent,
-    prompt: &str,
-    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
-) -> Result<()> {
-    let run = agent.run(prompt);
-    tokio::pin!(run);
-    let result = loop {
-        tokio::select! {
-            result = &mut run => break result,
-            Some(event) = receiver.recv() => events::render_console(event),
-        }
-    };
-    while let Ok(event) = receiver.try_recv() {
-        events::render_console(event);
-    }
-    result.map(|_| ())
+    fullscreen::run(agent, receiver).await
 }
 
 #[cfg(test)]
@@ -243,14 +194,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fullscreen_is_default_with_inline_and_console_opt_ins() {
-        let choose = |args: &[&str]| {
-            select_frontend(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>())
-        };
-        assert_eq!(choose(&[]), Frontend::Fullscreen);
-        assert_eq!(choose(&["--fullscreen"]), Frontend::Fullscreen);
-        assert_eq!(choose(&["--inline"]), Frontend::Inline);
-        assert_eq!(choose(&["--console"]), Frontend::Console);
+    fn fullscreen_is_the_only_frontend_and_obsolete_flags_are_rejected() {
+        assert!(validate_args(&[]).is_ok());
+        for arg in ["--inline", "--console", "--fullscreen", "--unknown"] {
+            let error = validate_args(&[arg.to_string()]).unwrap_err().to_string();
+            assert!(error.contains(arg));
+            assert!(error.contains("without arguments"));
+        }
     }
 
     #[test]

@@ -1,15 +1,18 @@
+use std::io::Write;
+
 use anyhow::{Context, Result};
 use crossterm::{
+    clipboard::CopyToClipboard,
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, EventStream, KeyCode, KeyEventKind, MouseEventKind,
+        Event, EventStream, KeyCode, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
 };
 use futures_util::StreamExt;
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     text::Line,
     widgets::Paragraph,
 };
@@ -21,14 +24,21 @@ use crate::{
     ui::{self, InputAction, OutputLine},
 };
 
-// The shared UI state owns formatting and input. This frontend owns retained
-// display history and scrolling instead of inserting it into terminal scrollback.
+mod selection;
+use selection::Selection;
+
+// UI state owns formatting/input; this screen owns the transcript and viewport.
 #[derive(Default)]
 struct App {
     content: ui::App,
     transcript: Vec<OutputLine>,
     // Zero follows the latest output; otherwise count rows back from the bottom.
     scroll_back: usize,
+    selection: Selection,
+    history_area: Rect,
+    visible_start: usize,
+    rendered_rows: Vec<Line<'static>>,
+    pending_copy: Option<String>,
 }
 
 impl App {
@@ -36,7 +46,7 @@ impl App {
         let mut app = Self::default();
         app.content.banner(model);
         app.content
-            .notice("Drag to select/copy · PgUp/PgDn/End scroll · F2 toggle mouse scrolling");
+            .notice("Drag and release to copy · wheel/PgUp/PgDn/End scroll");
         app
     }
 
@@ -56,34 +66,69 @@ impl App {
         let [history, live] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(frame.area());
         let rows = self.rows(history.width as usize);
+        if history != self.history_area {
+            // Mouse coordinates may refer to different text after a resize.
+            self.selection.clear();
+        } else if self.selection.is_active() {
+            // New model/tool output must not move the text under an active drag.
+            self.scroll_back = self
+                .scroll_back
+                .saturating_add(rows.len().saturating_sub(self.rendered_rows.len()));
+        }
         let max_scroll = rows.len().saturating_sub(history.height as usize);
         self.scroll_back = self.scroll_back.min(max_scroll);
         let start = max_scroll.saturating_sub(self.scroll_back);
-        let visible: Vec<_> = rows
-            .into_iter()
+        let visible = rows
+            .iter()
             .skip(start)
             .take(history.height as usize)
-            .collect();
+            .cloned()
+            .collect::<Vec<_>>();
         frame.render_widget(Paragraph::new(visible), history);
+        self.selection
+            .highlight(frame.buffer_mut(), history, start, &rows);
+        self.history_area = history;
+        self.visible_start = start;
+        self.rendered_rows = rows;
         self.content.view_live(frame, live);
     }
 
-    fn handle_terminal_event(
-        &mut self,
-        event: Event,
-        modes: &mut ScreenModes,
-    ) -> Result<InputAction> {
-        if matches!(&event, Event::Key(key) if key.code == KeyCode::F(2) && key.kind != KeyEventKind::Release)
-        {
-            modes.toggle_mouse()?;
-            self.content.notice(if modes.mouse_capture {
-                "Mouse scrolling enabled · F2 returns to text selection"
-            } else {
-                "Text selection enabled · Drag to select, then use your terminal's copy shortcut"
-            });
-            return Ok(InputAction::None);
+    fn handle_terminal_event(&mut self, event: Event) -> Result<InputAction> {
+        let action = self.handle_event(event);
+        self.write_pending_copy(&mut std::io::stdout())?;
+        Ok(action)
+    }
+
+    fn write_pending_copy(&mut self, writer: &mut impl Write) -> Result<()> {
+        if let Some(text) = self.pending_copy.take() {
+            // OSC 52 asks the terminal to write its host clipboard. No clipboard
+            // reads, platform subprocesses, or model output are involved.
+            execute!(writer, CopyToClipboard::to_clipboard_from(text))
+                .context("could not send selected text to the terminal clipboard")?;
         }
-        Ok(self.handle_event(event))
+        Ok(())
+    }
+
+    fn mouse_position(&self, mouse: &MouseEvent, clamp: bool) -> Option<(usize, usize)> {
+        let area = self.history_area;
+        let visible = self
+            .rendered_rows
+            .len()
+            .saturating_sub(self.visible_start)
+            .min(area.height as usize);
+        if area.width == 0 || visible == 0 {
+            return None;
+        }
+        if !clamp
+            && (!area.contains((mouse.column, mouse.row).into())
+                || mouse.row.saturating_sub(area.y) as usize >= visible)
+        {
+            return None;
+        }
+        Some((
+            self.visible_start + (mouse.row.saturating_sub(area.y) as usize).min(visible - 1),
+            mouse.column.saturating_sub(area.x).min(area.width - 1) as usize,
+        ))
     }
 
     fn handle_event(&mut self, event: Event) -> InputAction {
@@ -96,25 +141,47 @@ impl App {
                     MouseEventKind::ScrollDown => {
                         self.scroll_back = self.scroll_back.saturating_sub(3)
                     }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        self.selection.clear();
+                        if let Some((row, column)) = self.mouse_position(mouse, false) {
+                            self.selection.begin(row, column);
+                        }
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if let Some((row, column)) = self.mouse_position(mouse, true) {
+                            self.selection.extend(row, column);
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if let Some((row, column)) = self.mouse_position(mouse, true) {
+                            self.selection.extend(row, column);
+                        }
+                        self.pending_copy = self.selection.finish(&self.rendered_rows);
+                    }
                     _ => {}
                 }
                 return InputAction::None;
             }
-            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::PageUp => {
-                    self.scroll_back = self.scroll_back.saturating_add(10);
-                    return InputAction::None;
+            Event::Resize(_, _) | Event::FocusLost => self.selection.clear(),
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                self.selection.clear();
+                match key.code {
+                    KeyCode::PageUp => {
+                        self.scroll_back = self.scroll_back.saturating_add(10);
+                        return InputAction::None;
+                    }
+                    KeyCode::PageDown => {
+                        self.scroll_back = self.scroll_back.saturating_sub(10);
+                        return InputAction::None;
+                    }
+                    KeyCode::End => {
+                        self.scroll_back = 0;
+                        return InputAction::None;
+                    }
+                    _ => {}
                 }
-                KeyCode::PageDown => {
-                    self.scroll_back = self.scroll_back.saturating_sub(10);
-                    return InputAction::None;
-                }
-                KeyCode::End => {
-                    self.scroll_back = 0;
-                    return InputAction::None;
-                }
-                _ => {}
-            },
+            }
+            Event::Paste(_) => self.selection.clear(),
             _ => {}
         }
         self.content.handle_event(event)
@@ -122,31 +189,15 @@ impl App {
 }
 
 // Also release capture/paste mode during unwinding or a failed enable attempt.
-struct ScreenModes {
-    mouse_capture: bool,
-}
+struct ScreenModes;
 
 impl ScreenModes {
     fn new() -> Result<Self> {
-        let modes = Self {
-            mouse_capture: false,
-        };
-        // Mouse reporting steals selection drags from the terminal. Leave it
-        // disabled by default; F2 opts into wheel/trackpad event handling.
-        execute!(std::io::stdout(), DisableMouseCapture, EnableBracketedPaste)
+        let modes = Self;
+        // The application handles both wheel events and drag selection.
+        execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)
             .context("could not enable terminal input modes")?;
         Ok(modes)
-    }
-
-    fn toggle_mouse(&mut self) -> Result<()> {
-        if self.mouse_capture {
-            execute!(std::io::stdout(), DisableMouseCapture)
-        } else {
-            execute!(std::io::stdout(), EnableMouseCapture)
-        }
-        .context("could not change mouse capture")?;
-        self.mouse_capture = !self.mouse_capture;
-        Ok(())
     }
 }
 
@@ -163,12 +214,11 @@ impl Drop for ScreenModes {
 pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) -> Result<()> {
     let mut terminal = ratatui::init();
     let result = async {
-        let mut modes = ScreenModes::new()?;
-        run_app(&mut terminal, &mut agent, &mut receiver, &mut modes).await
+        let _modes = ScreenModes::new()?;
+        run_app(&mut terminal, &mut agent, &mut receiver).await
     }
     .await;
-    // Full-screen mode intentionally disappears on exit. Unlike native mode,
-    // entering and leaving the alternate screen are a matched pair here.
+    // Restore the alternate screen on both normal return and error paths.
     ratatui::restore();
     result
 }
@@ -177,14 +227,13 @@ async fn run_app(
     terminal: &mut DefaultTerminal,
     agent: &mut Agent,
     receiver: &mut UnboundedReceiver<AgentEvent>,
-    modes: &mut ScreenModes,
 ) -> Result<()> {
     let mut app = App::new(&agent.model);
     let mut keys = EventStream::new();
     loop {
         terminal.draw(|frame| app.view(frame))?;
         let event = keys.next().await.context("terminal input closed")??;
-        match app.handle_terminal_event(event, modes)? {
+        match app.handle_terminal_event(event)? {
             InputAction::Quit => return Ok(()),
             InputAction::None => continue,
             InputAction::Submit => {}
@@ -196,7 +245,6 @@ async fn run_app(
             &mut app,
             &mut keys,
             receiver,
-            modes,
             agent.run(prompt.trim()),
         )
         .await?
@@ -219,7 +267,6 @@ async fn run_turn(
     app: &mut App,
     keys: &mut EventStream,
     receiver: &mut UnboundedReceiver<AgentEvent>,
-    modes: &mut ScreenModes,
     run: impl std::future::Future<Output = Result<String>>,
 ) -> Result<TurnOutcome> {
     tokio::pin!(run);
@@ -236,7 +283,7 @@ async fn run_turn(
             event = keys.next() => {
                 let event = event.context("terminal input closed")??;
                 // Enter is ignored while busy, but drafting, modes and scrolling work.
-                match app.handle_terminal_event(event, modes)? {
+                match app.handle_terminal_event(event)? {
                     InputAction::Quit => return Ok(TurnOutcome::Quit),
                     InputAction::None | InputAction::Submit => {}
                 }
@@ -275,7 +322,7 @@ mod tests {
         crate::run_with_runtime(async {
             let mut terminal = ratatui::init();
             let result = async {
-                let mut modes = ScreenModes::new()?;
+                let _modes = ScreenModes::new()?;
                 let mut app = App::new("test/model");
                 app.handle_event(Event::Paste("Read Cargo.toml and summarize dependencies".into()));
                 app.content.submit();
@@ -297,14 +344,14 @@ mod tests {
                     sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText(answer.into()) })?;
                     Ok(answer.into())
                 };
-                match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, &mut modes, work).await? {
+                match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, work).await? {
                     TurnOutcome::Finished(result) => app.content.finish_turn(result),
                     TurnOutcome::Quit => anyhow::bail!("quit before response"),
                 }
                 loop {
                     terminal.draw(|frame| app.view(frame))?;
                     let event = keys.next().await.context("terminal input closed")??;
-                    if app.handle_terminal_event(event, &mut modes)? == InputAction::Quit { break }
+                    if app.handle_terminal_event(event)? == InputAction::Quit { break }
                 }
                 Ok(())
             }.await;
@@ -321,14 +368,14 @@ mod tests {
             let path = std::env::var("ROBBIE_TEST_FIFO")?;
             let mut terminal = ratatui::init();
             let result = async {
-                let mut modes = ScreenModes::new()?;
+                let _modes = ScreenModes::new()?;
                 let mut app = App::default();
                 assistant(
                     &mut app,
                     (0..60)
                         .map(|n| format!("history {n:02}"))
                         .collect::<Vec<_>>()
-                        .join("\n"),
+                        .join("\n\n"),
                 );
                 assistant(&mut app, "Blocked-read-test");
                 let mut keys = EventStream::new();
@@ -341,15 +388,8 @@ mod tests {
                     }
                     Ok(output)
                 };
-                let outcome = run_turn(
-                    &mut terminal,
-                    &mut app,
-                    &mut keys,
-                    &mut receiver,
-                    &mut modes,
-                    work,
-                )
-                .await?;
+                let outcome =
+                    run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, work).await?;
                 anyhow::ensure!(
                     matches!(outcome, TurnOutcome::Quit),
                     "expected Ctrl+C exit during blocked read"
@@ -361,6 +401,178 @@ mod tests {
             result
         })
         .unwrap();
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn drag_highlights_then_copies_once_on_release_and_clears() -> Result<()> {
+        use ratatui::style::Color;
+        let mut app = App::default();
+        assistant(&mut app, "**alpha** beta");
+        let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+        terminal.draw(|frame| app.view(frame))?;
+        app.handle_event(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        app.handle_event(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0));
+        terminal.draw(|frame| app.view(frame))?;
+        assert!(app.selection.is_active());
+        for x in 0..5 {
+            assert_eq!(
+                terminal.backend().buffer()[(x, 0)].bg,
+                Color::Rgb(50, 75, 110)
+            );
+        }
+        let mut clipboard = Vec::new();
+        app.write_pending_copy(&mut clipboard)?;
+        assert!(
+            clipboard.is_empty(),
+            "dragging must not write the clipboard"
+        );
+        app.handle_event(mouse(MouseEventKind::Up(MouseButton::Left), 4, 0));
+        assert!(!app.selection.is_active());
+        app.write_pending_copy(&mut clipboard)?;
+        assert_eq!(clipboard, b"\x1b]52;c;YWxwaGE=\x1b\\");
+        let copied = clipboard.clone();
+        app.write_pending_copy(&mut clipboard)?;
+        assert_eq!(clipboard, copied, "redraws must not copy again");
+        terminal.draw(|frame| app.view(frame))?;
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| cell.bg == Color::Reset)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn clicks_and_drags_in_the_live_input_or_blank_area_do_not_copy() -> Result<()> {
+        let mut app = App::default();
+        assistant(&mut app, "hello");
+        let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+        terminal.draw(|frame| app.view(frame))?;
+        for (y, end) in [(0, 0), (1, 10), (4, 10), (7, 10)] {
+            app.handle_event(mouse(MouseEventKind::Down(MouseButton::Left), 0, y));
+            app.handle_event(mouse(MouseEventKind::Up(MouseButton::Left), end, y));
+            let mut clipboard = Vec::new();
+            app.write_pending_copy(&mut clipboard)?;
+            assert!(clipboard.is_empty(), "unexpected copy on row {y}");
+            assert!(!app.selection.is_active());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn selection_tracks_scrolled_rows_and_survives_new_output_without_jumping() -> Result<()> {
+        let mut app = App::default();
+        assistant(
+            &mut app,
+            (0..40)
+                .map(|n| format!("row-{n:02}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+        terminal.draw(|frame| app.view(frame))?;
+        app.handle_event(mouse(MouseEventKind::ScrollUp, 0, 0));
+        terminal.draw(|frame| app.view(frame))?;
+        let original_start = app.visible_start;
+        let y = (0..app.history_area.height)
+            .find(|y| {
+                !app.rendered_rows[original_start + *y as usize]
+                    .to_string()
+                    .is_empty()
+            })
+            .unwrap();
+        let original_text = app.rendered_rows[original_start + y as usize].to_string();
+        app.handle_event(mouse(MouseEventKind::Down(MouseButton::Left), 0, y));
+        app.handle_event(mouse(MouseEventKind::Drag(MouseButton::Left), 5, y));
+        assistant(&mut app, "New output while selecting");
+        terminal.draw(|frame| app.view(frame))?;
+        assert_eq!(
+            app.visible_start, original_start,
+            "output moved the drag target"
+        );
+        app.handle_event(mouse(MouseEventKind::Up(MouseButton::Left), 5, y));
+        assert_eq!(app.pending_copy.as_deref(), Some(original_text.as_str()));
+        assert!(!app.selection.is_active());
+        Ok(())
+    }
+
+    #[test]
+    fn wheel_scrolling_during_a_drag_keeps_transcript_coordinates() -> Result<()> {
+        let mut app = App::default();
+        assistant(
+            &mut app,
+            (0..40)
+                .map(|n| format!("row-{n:02}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+        terminal.draw(|frame| app.view(frame))?;
+        let original_start = app.visible_start;
+        app.handle_event(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        app.handle_event(mouse(MouseEventKind::ScrollUp, 0, 0));
+        terminal.draw(|frame| app.view(frame))?;
+        assert!(app.visible_start < original_start);
+        app.handle_event(mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0));
+        app.handle_event(mouse(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let text = app.pending_copy.as_ref().unwrap();
+        assert!(text.contains('\n'));
+        assert!(text.starts_with(&app.rendered_rows[app.visible_start].to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn resizing_or_keyboard_input_cancels_a_drag_without_copying() -> Result<()> {
+        for event in [
+            Event::Resize(20, 8),
+            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Event::Paste("draft".into()),
+        ] {
+            let mut app = App::default();
+            assistant(&mut app, "alpha beta");
+            let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+            terminal.draw(|frame| app.view(frame))?;
+            app.handle_event(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+            app.handle_event(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0));
+            app.handle_event(event);
+            app.handle_event(mouse(MouseEventKind::Up(MouseButton::Left), 4, 0));
+            assert!(!app.selection.is_active());
+            assert!(app.pending_copy.is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn viewport_resize_cancels_selection_even_before_the_resize_event_arrives() -> Result<()> {
+        for (width, height) in [(20, 8), (40, 12), (1, 1), (0, 0)] {
+            let mut app = App::default();
+            assistant(&mut app, "alpha beta");
+            let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+            terminal.draw(|frame| app.view(frame))?;
+            app.handle_event(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+            app.handle_event(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0));
+            terminal.backend_mut().resize(width, height);
+            terminal.draw(|frame| app.view(frame))?;
+            assert!(
+                !app.selection.is_active(),
+                "selection survived viewport {width}x{height}"
+            );
+            app.handle_event(mouse(MouseEventKind::Up(MouseButton::Left), 4, 0));
+            assert!(app.pending_copy.is_none());
+        }
+        Ok(())
     }
 
     #[test]
