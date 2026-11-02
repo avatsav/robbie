@@ -216,7 +216,51 @@ impl Drop for ScreenModes {
     }
 }
 
+// Ratatui restores the termios it captured, but macOS can leave the transient
+// PENDIN flag set when canonical mode returns. Restore the exact pre-init state
+// with TCSAFLUSH so the shell does not inherit a pending-input marker.
+#[cfg(unix)]
+struct TerminalState {
+    original: libc::termios,
+}
+
+#[cfg(unix)]
+impl TerminalState {
+    fn capture() -> Option<Self> {
+        let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr initializes the struct on success.
+        if unsafe { libc::tcgetattr(libc::STDIN_FILENO, original.as_mut_ptr()) } == 0 {
+            Some(Self {
+                original: unsafe { original.assume_init() },
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TerminalState {
+    fn drop(&mut self) {
+        // SAFETY: original was initialized by tcgetattr.
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.original);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct TerminalState;
+
+#[cfg(not(unix))]
+impl TerminalState {
+    fn capture() -> Option<Self> {
+        None
+    }
+}
+
 pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) -> Result<()> {
+    let terminal_state = TerminalState::capture();
     let mut terminal = ratatui::init();
     let result = async {
         let _modes = ScreenModes::new()?;
@@ -225,6 +269,7 @@ pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) 
     .await;
     // Restore the alternate screen on both normal return and error paths.
     ratatui::restore();
+    drop(terminal_state);
     result
 }
 
@@ -364,6 +409,7 @@ mod tests {
     #[ignore = "requires a PTY; run via tests/blocked_tool_exit.py"]
     fn completed_read_terminal_fixture() {
         crate::run_with_runtime(async {
+            let terminal_state = TerminalState::capture();
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
@@ -398,6 +444,7 @@ mod tests {
                 Ok(())
             }.await;
             ratatui::restore();
+            drop(terminal_state);
             result
         }).unwrap();
     }
@@ -408,6 +455,7 @@ mod tests {
     fn blocked_tool_terminal_fixture() {
         crate::run_with_runtime(async {
             let path = std::env::var("ROBBIE_TEST_FIFO")?;
+            let terminal_state = TerminalState::capture();
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
@@ -456,6 +504,7 @@ mod tests {
             }
             .await;
             ratatui::restore();
+            drop(terminal_state);
             result
         })
         .unwrap();
