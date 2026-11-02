@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
 
 mod events;
 mod fullscreen;
@@ -11,15 +10,13 @@ mod skills;
 mod tools;
 mod ui;
 use events::{AgentEvent, EventKind, EventSender};
+use model::{AnthropicMessages, Message, ModelClient, OpenRouter, Output, ToolResult};
 use tools::ToolRegistry;
 
 const SYSTEM: &str = "You are a coding agent. Use tools to inspect and change the workspace. Load relevant skills before acting, then report clearly.";
 
 struct Agent {
-    client: reqwest::Client,
-    api_key: String,
-    model: String,
-    provider: Option<String>,
+    model: Arc<ModelClient>,
     tools: ToolRegistry,
     events: EventSender,
     source: &'static str,
@@ -27,7 +24,7 @@ struct Agent {
     // TODO: When adding conversation persistence or turn resumption, repair
     // incomplete tool exchanges. A missing result may mean the tool's outcome is
     // unknown, not that it was cancelled; do not blindly retry side effects.
-    messages: Vec<Value>,
+    messages: Vec<Message>,
 }
 
 impl Agent {
@@ -51,87 +48,49 @@ impl Agent {
     }
 
     async fn run(&mut self, prompt: &str) -> Result<String> {
-        self.run_at(prompt, "https://openrouter.ai/api/v1/messages")
-            .await
-    }
-
-    // An explicit endpoint lets local HTTP tests exercise the real agent loop.
-    async fn run_at(&mut self, prompt: &str, endpoint: &str) -> Result<String> {
-        self.messages
-            .push(json!({"role": "user", "content": prompt}));
+        self.messages.push(Message::User(prompt.to_owned()));
 
         loop {
-            let mut request = json!({
-                "model": self.model,
-                "max_tokens": 8000,
-                "system": self.system_prompt(),
-                "messages": self.messages,
-                "tools": self.tools.schemas()
-            });
-            if let Some(provider) = &self.provider {
-                request["provider"] = json!({ "only": [provider] });
-            }
             self.emit(EventKind::ModelStarted);
-            // Retry only the buffered HTTP exchange. History updates and tool
-            // execution stay outside the retry loop, for parent and child alike.
-            let body = model::send(
-                self.client
-                    .post(endpoint)
-                    .bearer_auth(&self.api_key)
-                    .header("anthropic-version", "2023-06-01")
-                    .json(&request),
-            )
-            .await?;
-            let blocks = body["content"]
-                .as_array()
-                .context("model response has no content blocks")?;
-            self.messages
-                .push(json!({"role": "assistant", "content": blocks}));
+            // Only complete() retries HTTP. History changes and tool execution
+            // stay outside it, for parent and child alike.
+            let reply = self
+                .model
+                .complete(&self.system_prompt(), &self.messages, &self.tools.schemas())
+                .await?;
+            self.messages.push(Message::Assistant(reply.clone()));
 
             let mut results = Vec::new();
-            for block in blocks {
-                match block["type"].as_str() {
-                    Some("text") => {
-                        if let Some(text) = block["text"].as_str() {
-                            self.emit(EventKind::AssistantText(text.to_string()));
-                        }
-                    }
-                    Some("tool_use") => {
-                        let id = block["id"].as_str().context("tool use has no ID")?;
-                        let name = block["name"].as_str().unwrap_or("");
+            for output in &reply.output {
+                match output {
+                    Output::Text(text) => self.emit(EventKind::AssistantText(text.clone())),
+                    Output::ToolCall(call) => {
                         self.emit(EventKind::ToolStarted {
-                            name: name.to_string(),
-                            input: block["input"].clone(),
+                            name: call.name.clone(),
+                            input: call.arguments.clone(),
                         });
-                        let (output, is_error) = self.tools.execute(name, &block["input"]).await;
+                        let (output, is_error) =
+                            self.tools.execute(&call.name, &call.arguments).await;
                         self.emit(EventKind::ToolFinished {
-                            name: name.to_string(),
+                            name: call.name.clone(),
                             output: output.clone(),
                             is_error,
                         });
-                        results.push(json!({"type": "tool_result", "tool_use_id": id, "content": output, "is_error": is_error}));
+                        results.push(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            content: output,
+                            is_error,
+                        });
                     }
-                    _ => {}
                 }
             }
             if results.is_empty() {
-                return Ok(response_text(blocks));
+                // Return only the final reply, not intermediate tool-use text.
+                return Ok(reply.text());
             }
-            // Tool results are user messages in the Anthropic messages protocol.
-            self.messages
-                .push(json!({"role": "user", "content": results}));
+            self.messages.push(Message::ToolResults(results));
         }
     }
-}
-
-// Only the final model response is returned, not intermediate tool-use text.
-fn response_text(blocks: &[Value]) -> String {
-    blocks
-        .iter()
-        .filter(|block| block["type"].as_str() == Some("text"))
-        .filter_map(|block| block["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn validate_args(args: &[String]) -> Result<()> {
@@ -168,26 +127,28 @@ async fn run() -> Result<()> {
             .context("skill scanning task failed")??,
     );
     let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let api_key = std::env::var("OPENROUTER_API_KEY").context("OPENROUTER_API_KEY is not set")?;
+    let model_name = std::env::var("OPENROUTER_MODEL").context("OPENROUTER_MODEL is not set")?;
+    let upstream = std::env::var("OPENROUTER_PROVIDER")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let model = Arc::new(ModelClient::new(
+        model::client()?,
+        OpenRouter::new(api_key, upstream),
+        AnthropicMessages,
+        model_name,
+    ));
     let mut agent = Agent {
-        client: model::client()?,
-        api_key: std::env::var("OPENROUTER_API_KEY").context("OPENROUTER_API_KEY is not set")?,
-        model: std::env::var("OPENROUTER_MODEL").context("OPENROUTER_MODEL is not set")?,
-        provider: std::env::var("OPENROUTER_PROVIDER")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
+        model,
         tools: ToolRegistry::with_skills(skills),
         events,
         source: "main",
         messages: Vec::new(),
     };
-    agent.tools.enable_sub_agent(
-        agent.client.clone(),
-        agent.api_key.clone(),
-        agent.model.clone(),
-        agent.provider.clone(),
-        agent.events.clone(),
-    );
+    agent
+        .tools
+        .enable_sub_agent(Arc::clone(&agent.model), agent.events.clone());
 
     fullscreen::run(agent, receiver).await
 }
@@ -251,16 +212,5 @@ mod tests {
             Ok(())
         })
         .unwrap();
-    }
-
-    #[test]
-    fn response_text_keeps_only_text_blocks_in_order() {
-        let blocks = vec![
-            json!({"type": "text", "text": "First"}),
-            json!({"type": "tool_use", "id": "call", "name": "bash"}),
-            json!({"type": "text", "text": "Second"}),
-        ];
-        assert_eq!(response_text(&blocks), "First\nSecond");
-        assert_eq!(response_text(&[]), "");
     }
 }

@@ -56,19 +56,14 @@ impl ToolRegistry {
         registry
     }
 
+    // Share immutable connection/protocol configuration, never conversation state.
     pub fn enable_sub_agent(
         &mut self,
-        client: reqwest::Client,
-        api_key: String,
-        model: String,
-        provider: Option<String>,
+        model: Arc<crate::model::ModelClient>,
         events: crate::events::EventSender,
     ) {
         self.register(Box::new(sub_agent::SubAgent {
-            client,
-            api_key,
             model,
-            provider,
             events,
             skills: Arc::clone(&self.skills),
         }));

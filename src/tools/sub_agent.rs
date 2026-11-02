@@ -8,10 +8,7 @@ use crate::Agent;
 use crate::skills::SkillRegistry;
 
 pub(super) struct SubAgent {
-    pub(super) client: reqwest::Client,
-    pub(super) api_key: String,
-    pub(super) model: String,
-    pub(super) provider: Option<String>,
+    pub(super) model: Arc<crate::model::ModelClient>,
     pub(super) events: crate::events::EventSender,
     pub(super) skills: Arc<SkillRegistry>,
 }
@@ -19,10 +16,7 @@ pub(super) struct SubAgent {
 impl SubAgent {
     fn new_child(&self) -> Agent {
         Agent {
-            client: self.client.clone(),
-            api_key: self.api_key.clone(),
-            model: self.model.clone(),
-            provider: self.provider.clone(),
+            model: Arc::clone(&self.model),
             tools: ToolRegistry::child(Arc::clone(&self.skills)),
             events: self.events.clone(),
             source: "subagent",
@@ -73,10 +67,12 @@ mod tests {
     fn sub_agent() -> SubAgent {
         let (events, _) = tokio::sync::mpsc::unbounded_channel();
         SubAgent {
-            client: reqwest::Client::new(),
-            api_key: "test".into(),
-            model: "test/model".into(),
-            provider: None,
+            model: Arc::new(crate::model::ModelClient::new(
+                crate::model::client().unwrap(),
+                crate::model::OpenRouter::new("test".into(), None),
+                crate::model::AnthropicMessages,
+                "test/model".into(),
+            )),
             events,
             skills: Arc::new(SkillRegistry::default()),
         }
@@ -88,9 +84,11 @@ mod tests {
         let mut first = tool.new_child();
         first
             .messages
-            .push(json!({"role": "user", "content": "private"}));
+            .push(crate::model::Message::User("private".into()));
         let second = tool.new_child();
         assert!(second.messages.is_empty());
+        assert!(Arc::ptr_eq(&tool.model, &first.model));
+        assert!(Arc::ptr_eq(&first.model, &second.model));
         let names: Vec<String> = second
             .tools
             .schemas()
@@ -127,21 +125,13 @@ mod tests {
             .await;
         assert!(!error);
         assert!(content.contains("Secret ownership instructions."));
-        first
-            .messages
-            .push(json!({"role": "user", "content": content}));
+        first.messages.push(crate::model::Message::User(content));
         let second = tool.new_child();
         assert!(second.messages.is_empty());
         assert_eq!(first.system_prompt(), second.system_prompt());
 
         let mut parent = ToolRegistry::with_skills(Arc::clone(&tool.skills));
-        parent.enable_sub_agent(
-            tool.client.clone(),
-            tool.api_key.clone(),
-            tool.model.clone(),
-            None,
-            tool.events.clone(),
-        );
+        parent.enable_sub_agent(Arc::clone(&tool.model), tool.events.clone());
         assert_eq!(
             parent.skill_descriptions(),
             second.tools.skill_descriptions()
@@ -179,13 +169,7 @@ mod tests {
     async fn parent_registry_exposes_and_dispatches_sub_agent() {
         let mut registry = ToolRegistry::new();
         let (events, _) = tokio::sync::mpsc::unbounded_channel();
-        registry.enable_sub_agent(
-            reqwest::Client::new(),
-            "test".into(),
-            "test/model".into(),
-            None,
-            events,
-        );
+        registry.enable_sub_agent(Arc::clone(&sub_agent().model), events);
         assert!(
             registry
                 .schemas()

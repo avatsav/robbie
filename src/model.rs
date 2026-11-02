@@ -1,4 +1,6 @@
-//! Retry a single, buffered model request, never an agent turn or tool execution.
+//! Compose protocol, provider, and one buffered HTTP exchange.
+//!
+//! Retry a model request, never an agent turn or tool execution.
 //!
 //! Retrying a POST after a lost response can duplicate provider work/billing. It
 //! cannot replay local tools: callers only consume a successfully decoded reply.
@@ -7,6 +9,55 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, RequestBuilder, StatusCode, header::RETRY_AFTER};
 use serde_json::Value;
+
+mod conversation;
+mod protocol;
+mod provider;
+
+pub use conversation::{Message, Output, Reply, ToolCall, ToolResult};
+pub use protocol::{AnthropicMessages, Protocol};
+pub use provider::{OpenRouter, Provider};
+
+// Concrete composition for today's one provider/protocol pair. Traits define
+// the seams without a registry, trait objects, or runtime protocol selection.
+pub struct ModelClient {
+    http: Client,
+    provider: OpenRouter,
+    protocol: AnthropicMessages,
+    model: String,
+}
+
+impl ModelClient {
+    pub fn new(
+        http: Client,
+        provider: OpenRouter,
+        protocol: AnthropicMessages,
+        model: String,
+    ) -> Self {
+        Self {
+            http,
+            provider,
+            protocol,
+            model,
+        }
+    }
+
+    pub fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    pub async fn complete(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> Result<Reply> {
+        let encoded = self.protocol.encode(&self.model, system, messages, tools);
+        let request = self.provider.prepare(&self.http, encoded)?;
+        let body = send(request).await?;
+        self.protocol.decode(body)
+    }
+}
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
@@ -278,6 +329,16 @@ mod tests {
                 }))
         }
 
+        fn model(&self) -> Arc<ModelClient> {
+            Arc::new(ModelClient::new(
+                client().unwrap(),
+                OpenRouter::new("test-secret".into(), Some("test-provider".into()))
+                    .with_base_url(self.url.strip_suffix("/messages").unwrap().to_owned()),
+                AnthropicMessages,
+                "test".into(),
+            ))
+        }
+
         fn count(&self) -> usize {
             self.requests.lock().unwrap().len()
         }
@@ -319,10 +380,7 @@ mod tests {
         ]);
         let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let mut agent = Agent {
-            client: client().unwrap(),
-            api_key: "test-secret".into(),
-            model: "test".into(),
-            provider: Some("test-provider".into()),
+            model: server.model(),
             tools: ToolRegistry::new(),
             events,
             source: "main",
@@ -330,18 +388,19 @@ mod tests {
         };
         let text = tokio::time::timeout(
             Duration::from_secs(10),
-            agent.run_at("use the tool then reply", &server.url),
+            agent.run("use the tool then reply"),
         )
         .await
         .unwrap()
         .unwrap();
         assert_eq!(text, "done");
         assert_eq!(agent.messages.len(), 4);
-        assert_eq!(agent.messages[2]["content"][0]["tool_use_id"], "one-call");
-        assert_eq!(
-            agent.messages[2]["content"][0]["content"],
-            "one-execution\n[exit 0]"
-        );
+        let Message::ToolResults(results) = &agent.messages[2] else {
+            panic!("expected tool results");
+        };
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tool_call_id, "one-call");
+        assert_eq!(results[0].content, "one-execution\n[exit 0]");
         let mut started = 0;
         let mut finished = 0;
         let mut replies = 0;
@@ -361,6 +420,117 @@ mod tests {
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[1], requests[2]);
         assert!(requests[1].contains("test-provider"));
+        for request in requests.iter() {
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("x-openrouter-cache: true")
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("anthropic-version: 2023-06-01")
+            );
+        }
+        let body: Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["messages"][2]["role"], "user");
+        assert_eq!(body["messages"][2]["content"][0]["tool_use_id"], "one-call");
+    }
+
+    #[tokio::test]
+    async fn parent_and_real_child_share_provider_protocol_and_cache_but_not_history() {
+        use crate::{Agent, ToolRegistry, events::EventKind};
+        let server = Server::new(vec![
+            Reply::Http(200, "", SUCCESS),
+            Reply::Http(
+                200,
+                "",
+                r#"{"content":[{"type":"tool_use","id":"child-call","name":"bash","input":{"command":"printf child-execution"}}]}"#,
+            ),
+            Reply::Http(200, "", SUCCESS),
+        ]);
+        let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut parent = Agent {
+            model: server.model(),
+            tools: ToolRegistry::new(),
+            events,
+            source: "main",
+            messages: Vec::new(),
+        };
+        parent
+            .tools
+            .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+        assert_eq!(parent.run("parent-only-secret").await.unwrap(), "done");
+        let (text, is_error) = tokio::time::timeout(
+            Duration::from_secs(10),
+            parent.tools.execute(
+                "sub_agent",
+                &serde_json::json!({"prompt": "child-only-task"}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(!is_error, "{text}");
+        assert_eq!(text, "done");
+        assert_eq!(parent.messages.len(), 2);
+        let mut child_tool_calls = 0;
+        while let Ok(event) = receiver.try_recv() {
+            if matches!(event.kind, EventKind::ToolStarted { .. }) {
+                assert_eq!(event.source, "subagent");
+                child_tool_calls += 1;
+            }
+        }
+        assert_eq!(child_tool_calls, 1);
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        for request in requests.iter() {
+            let headers = request
+                .split_once("\r\n\r\n")
+                .unwrap()
+                .0
+                .to_ascii_lowercase();
+            assert!(headers.contains("authorization: bearer test-secret"));
+            assert!(headers.contains("x-openrouter-cache: true"));
+            assert!(headers.contains("anthropic-version: 2023-06-01"));
+            assert!(request.contains("test-provider"));
+        }
+        assert!(requests[0].contains("parent-only-secret"));
+        assert!(!requests[1].contains("parent-only-secret"));
+        assert!(requests[1].contains("child-only-task"));
+        assert!(requests[2].contains("child-call"));
+        assert!(requests[2].contains("child-execution"));
+    }
+
+    #[tokio::test]
+    async fn malformed_protocol_reply_never_retries_or_executes_partial_tool_calls() {
+        use crate::{Agent, ToolRegistry, events::EventKind};
+        let server = Server::new(vec![Reply::Http(
+            200,
+            "",
+            r#"{"content":[{"type":"tool_use","id":"valid","name":"bash","input":{"command":"printf should-not-run"}},{"type":"tool_use","name":"bash","input":{}}]}"#,
+        )]);
+        let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut agent = Agent {
+            model: server.model(),
+            tools: ToolRegistry::new(),
+            events,
+            source: "main",
+            messages: Vec::new(),
+        };
+        assert!(
+            agent
+                .run("test malformed response")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("no ID")
+        );
+        assert_eq!(server.count(), 1);
+        assert_eq!(agent.messages.len(), 1);
+        while let Ok(event) = receiver.try_recv() {
+            assert!(!matches!(event.kind, EventKind::ToolStarted { .. }));
+        }
     }
 
     #[tokio::test]

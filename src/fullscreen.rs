@@ -233,7 +233,7 @@ async fn run_app(
     agent: &mut Agent,
     receiver: &mut UnboundedReceiver<AgentEvent>,
 ) -> Result<()> {
-    let mut app = App::new(&agent.model);
+    let mut app = App::new(agent.model.model_name());
     // Capability probing owns stdin briefly, before EventStream starts reading.
     app.content.configure_mascot_graphics();
     let mut workspace = ui::WorkspaceMonitor::start();
