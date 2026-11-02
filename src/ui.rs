@@ -322,6 +322,7 @@ impl App {
     pub(super) fn handle_event(&mut self, event: Event) -> InputAction {
         // Paste is inserted as text, never interpreted as submit/quit keys.
         if let Event::Paste(text) = event {
+            self.mascot.interact();
             self.input.push_str(&clean(&text).replace('\n', " "));
             return InputAction::None;
         }
@@ -345,6 +346,25 @@ impl App {
                 }
                 _ => InputAction::None,
             };
+        }
+        // Draft interaction wakes/suppresses idle emotes even if it does not
+        // change text (e.g. backspace on an empty draft). Display shortcuts and
+        // key releases above deliberately leave the animation untouched.
+        if !key.modifiers.contains(KeyModifiers::ALT)
+            && (matches!(
+                key.code,
+                KeyCode::Enter
+                    | KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Home
+                    | KeyCode::End
+            ) || matches!(key.code, KeyCode::Char(c) if !c.is_control()))
+        {
+            self.mascot.interact();
         }
         match key.code {
             KeyCode::Enter if !self.failed && !self.input.trim().is_empty() => InputAction::Submit,

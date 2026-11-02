@@ -7,6 +7,10 @@ rustup component add rustfmt clippy
 git config --local core.hooksPath .githooks
 ```
 
+## Prototypes
+
+- [Mascot playground](../prototypes/mascot-playground.html): open the HTML file directly in a browser to explore expressions, palettes, and idle/sleep/wake timing. No server or dependencies; playground changes do not modify the Rust implementation.
+
 ## Keyboard shortcuts
 
 - **Ctrl+O** cycles tool-output detail.

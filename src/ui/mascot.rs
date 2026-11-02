@@ -1,6 +1,10 @@
 //! Animated mascot: a 16×16 terminal image or a 12×12 tiled fallback.
 //! Animation sampling is time-based; drawing never sleeps or writes ANSI.
-use std::time::{Duration, Instant};
+use std::{
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hasher},
+    time::{Duration, Instant},
+};
 
 use self::sprite::{BodyPose as P, Expression as E, Palette};
 use ratatui::{
@@ -11,6 +15,8 @@ use ratatui::{
 use ratatui_image::{Image, protocol::Protocol};
 
 mod graphics;
+mod idle;
+mod scenes;
 mod sprite;
 #[cfg(test)]
 mod tests;
@@ -40,7 +46,7 @@ pub(super) enum Activity {
     Error,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Moment {
     expression: E,
     hop: usize,
@@ -57,8 +63,10 @@ const fn m(expression: E, hop: usize, pose: P, ms: u64) -> Moment {
     }
 }
 
-// Timings and poses from robbie-squish's demo. Completion scenes play once;
-// idle, thinking, and working loop without resetting on repeated events.
+const NEUTRAL: Moment = m(E::Idle, 0, P::Neutral, 0);
+
+// Original activity timings stay unchanged. The old idle loop is now one
+// entry in the repertoire, separated from other emotes by neutral rests.
 const IDLE: &[Moment] = &[
     m(E::Idle, 0, P::Neutral, 600),
     m(E::LookLeft, 0, P::Neutral, 350),
@@ -99,6 +107,7 @@ const ERROR: &[Moment] = &[
 pub(super) struct Mascot {
     activity: Activity,
     started: Instant,
+    idle: idle::Idle,
     graphics: Option<graphics::Graphics>,
     palette_index: usize,
     hidden: bool,
@@ -107,9 +116,13 @@ pub(super) struct Mascot {
 
 impl Default for Mascot {
     fn default() -> Self {
+        let now = Instant::now();
+        // Standard-library per-instance entropy for cosmetic randomness only.
+        let seed = RandomState::new().build_hasher().finish() as u32;
         Self {
             activity: Activity::Idle,
-            started: Instant::now(),
+            started: now,
+            idle: idle::Idle::new(now, seed),
             graphics: None,
             palette_index: 0,
             hidden: false,
@@ -120,6 +133,10 @@ impl Default for Mascot {
 
 impl Mascot {
     pub(super) fn set_activity(&mut self, activity: Activity) {
+        self.set_activity_at(activity, Instant::now());
+    }
+
+    fn set_activity_at(&mut self, activity: Activity, now: Instant) {
         if self.activity != activity {
             // Keep the old color through completion, including its settled
             // pose. An early new prompt also ends the previous completion.
@@ -127,18 +144,42 @@ impl Mascot {
                 self.palette_index = (self.palette_index + 1) % PALETTES.len();
             }
             self.activity = activity;
-            self.started = Instant::now();
+            self.started = now;
+            if activity == Activity::Idle {
+                self.idle.reset(now);
+            }
+        }
+    }
+
+    pub(super) fn interact(&mut self) {
+        self.interact_at(Instant::now());
+    }
+
+    fn interact_at(&mut self, now: Instant) {
+        // Drafting must not cancel work/completion or advance the palette.
+        if self.activity == Activity::Idle {
+            self.idle.interact(now);
         }
     }
 
     pub(super) fn advance(&mut self) {
+        self.advance_at(Instant::now());
+    }
+
+    fn advance_at(&mut self, now: Instant) {
         let completion = match self.activity {
-            Activity::Success => SUCCESS,
-            Activity::Error => ERROR,
-            _ => return,
+            Activity::Success => Some(SUCCESS),
+            Activity::Error => Some(ERROR),
+            _ => None,
         };
-        if self.started.elapsed().as_millis() >= duration(completion) {
-            self.set_activity(Activity::Idle);
+        if let Some(sequence) = completion {
+            let finished = self.started + Duration::from_millis(duration(sequence) as u64);
+            if now >= finished {
+                self.set_activity_at(Activity::Idle, finished);
+            }
+        }
+        if self.activity == Activity::Idle {
+            self.idle.advance(now);
         }
     }
 
@@ -177,13 +218,21 @@ impl Mascot {
         if !self.is_visible() {
             return None;
         }
-        let moment = moment_at(self.activity, self.started.elapsed());
+        let moment = self.moment(Instant::now());
         let palette = PALETTES[self.palette_index];
         Some(if let Some(graphics) = &self.graphics {
             MascotFrame::Image(graphics.frame(moment, palette)?)
         } else {
             MascotFrame::Tiles { moment, palette }
         })
+    }
+
+    fn moment(&self, now: Instant) -> Moment {
+        if self.activity == Activity::Idle {
+            self.idle.moment(now)
+        } else {
+            moment_at(self.activity, now.saturating_duration_since(self.started))
+        }
     }
 }
 
@@ -205,21 +254,37 @@ fn duration(sequence: &[Moment]) -> u128 {
     sequence.iter().map(|moment| u128::from(moment.ms)).sum()
 }
 
+// The complete catalogue is shared by startup image caching and renderer tests.
+// A new scene should never require editing either renderer's frame list.
+fn all_moments() -> impl Iterator<Item = &'static Moment> {
+    [THINKING, WORKING, SUCCESS, ERROR]
+        .into_iter()
+        .flatten()
+        .chain(
+            scenes::Scene::ALL
+                .into_iter()
+                .flat_map(|scene| scene.sequence()),
+        )
+}
+
 fn moment_at(activity: Activity, elapsed: Duration) -> Moment {
-    let mut sequence = match activity {
-        Activity::Idle => IDLE,
+    let sequence = match activity {
+        Activity::Idle => return NEUTRAL,
         Activity::Thinking => THINKING,
         Activity::Working => WORKING,
         Activity::Success => SUCCESS,
         Activity::Error => ERROR,
     };
-    let mut ms = elapsed.as_millis();
-    let total = duration(sequence);
-    if matches!(activity, Activity::Success | Activity::Error) && ms >= total {
-        ms -= total;
-        sequence = IDLE;
+    if matches!(activity, Activity::Success | Activity::Error)
+        && elapsed.as_millis() >= duration(sequence)
+    {
+        return NEUTRAL;
     }
-    ms %= duration(sequence);
+    sequence_moment(sequence, elapsed)
+}
+
+fn sequence_moment(sequence: &[Moment], elapsed: Duration) -> Moment {
+    let mut ms = elapsed.as_millis() % duration(sequence);
     for moment in sequence {
         if ms < u128::from(moment.ms) {
             return *moment;
@@ -242,7 +307,6 @@ mod animation_tests {
     #[test]
     fn original_squish_hops_and_scene_timing_are_preserved() {
         for (activity, sequence) in [
-            (Activity::Idle, IDLE),
             (Activity::Thinking, THINKING),
             (Activity::Working, WORKING),
             (Activity::Success, SUCCESS),

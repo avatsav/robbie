@@ -42,19 +42,13 @@ fn rgb(Rgb(r, g, b): Rgb) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ERROR, IDLE, PALETTES, SUCCESS, THINKING, WORKING};
+    use super::super::{IDLE, PALETTES, SUCCESS, all_moments};
     use super::*;
 
     #[test]
     fn tiles_preserve_every_pixel_color_and_transparency_at_an_offset() {
         for palette in PALETTES {
-            for moment in IDLE
-                .iter()
-                .chain(THINKING)
-                .chain(WORKING)
-                .chain(SUCCESS)
-                .chain(ERROR)
-            {
+            for moment in all_moments() {
                 let pixels =
                     sprite_12_with_pose(moment.expression, moment.hop, moment.pose, palette);
                 let area = Rect::new(2, 3, SIZE.width, SIZE.height);

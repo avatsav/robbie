@@ -84,10 +84,111 @@ const SQUISH_SHAPE_12: [&str; COMPACT_SIZE] = [
     "............",
 ];
 
+// Sleep and wake keep the standing baseline, but tuck away the feet/aerial.
+const SLEEP_SHAPE: [&str; SIZE] = [
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "...##########...",
+    "..############..",
+    ".##############.",
+    ".##############.",
+    "..############..",
+    "...##########...",
+    "................",
+];
+const SLEEP_BREATH_SHAPE: [&str; SIZE] = [
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "...##########...",
+    "..############..",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    "..############..",
+    "...##########...",
+    "................",
+];
+const RISING_SHAPE: [&str; SIZE] = [
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    ".......##.......",
+    ".......##.......",
+    "...##########...",
+    "..############..",
+    "..############..",
+    "..############..",
+    "..############..",
+    "...##########...",
+    "....###..###....",
+    "....###..###....",
+    "................",
+];
+const SLEEP_SHAPE_12: [&str; COMPACT_SIZE] = [
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "..########..",
+    ".##########.",
+    "############",
+    ".##########.",
+    "..########..",
+    "............",
+];
+const SLEEP_BREATH_SHAPE_12: [&str; COMPACT_SIZE] = [
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "..########..",
+    ".##########.",
+    "############",
+    "############",
+    ".##########.",
+    "..########..",
+    "............",
+];
+const RISING_SHAPE_12: [&str; COMPACT_SIZE] = [
+    "............",
+    "............",
+    "............",
+    "............",
+    ".....##.....",
+    "..########..",
+    ".##########.",
+    ".##########.",
+    ".##########.",
+    "...##..##...",
+    "...##..##...",
+    "............",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BodyPose {
     Neutral,
     Squish,
+    Sleep,
+    SleepBreath,
+    Rising,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +258,11 @@ pub(super) enum Expression {
     Surprised,
     Confused,
     Blink,
+    Wink,
+    Skeptical,
+    Sleepy,
+    LookDown,
+    Sleep,
 }
 
 fn eye_pixel<const N: usize>(
@@ -190,6 +296,7 @@ fn eye_rect<const N: usize>(
 
 fn sprite_grid<const N: usize>(
     shape: &[&str; N],
+    pose: BodyPose,
     expression: Expression,
     hop: usize,
     palette: Palette,
@@ -215,8 +322,12 @@ fn sprite_grid<const N: usize>(
     }
 
     // Pixel-art decisions for each resolution, not rescaled vector geometry.
-    // Raise the face above the feet; every expression uses these same anchors.
-    let (lx, rx, ey) = if N == 16 { (5, 10, 9) } else { (3, 7, 6) };
+    // Sleep lowers the face with the body; the wake's rising pose uses the
+    // standing anchors again. No fractional scaling or geometry interpolation.
+    let (lx, rx, mut ey) = if N == 16 { (5, 10, 9) } else { (3, 7, 6) };
+    if matches!(pose, BodyPose::Sleep | BodyPose::SleepBreath) {
+        ey = if N == 16 { 11 } else { 7 };
+    }
     let eye = palette.eyes;
     match expression {
         Expression::Idle => {
@@ -235,7 +346,23 @@ fn sprite_grid<const N: usize>(
             eye_rect(&mut pixels, shape, lx, ey - 1, 2, 2, eye);
             eye_rect(&mut pixels, shape, rx, ey - 1, 2, 2, eye);
         }
-        Expression::Focused | Expression::Blink => {
+        Expression::LookDown => {
+            eye_rect(&mut pixels, shape, lx, ey + 1, 2, 2, eye);
+            eye_rect(&mut pixels, shape, rx, ey + 1, 2, 2, eye);
+        }
+        Expression::Sleepy => {
+            eye_rect(&mut pixels, shape, lx, ey, 2, 1, eye);
+            eye_rect(&mut pixels, shape, rx, ey, 2, 1, eye);
+        }
+        Expression::Wink => {
+            eye_rect(&mut pixels, shape, lx, ey, 2, 2, eye);
+            eye_rect(&mut pixels, shape, rx, ey + 1, 2, 1, eye);
+        }
+        Expression::Skeptical => {
+            eye_rect(&mut pixels, shape, lx, ey + 1, 2, 1, eye);
+            eye_rect(&mut pixels, shape, rx, ey - 1, 2, 2, eye);
+        }
+        Expression::Focused | Expression::Blink | Expression::Sleep => {
             eye_rect(&mut pixels, shape, lx, ey + 1, 2, 1, eye);
             eye_rect(&mut pixels, shape, rx, ey + 1, 2, 1, eye);
         }
@@ -273,8 +400,11 @@ pub(super) fn sprite_with_pose(
     let shape = match pose {
         BodyPose::Neutral => &SHAPE,
         BodyPose::Squish => &SQUISH_SHAPE,
+        BodyPose::Sleep => &SLEEP_SHAPE,
+        BodyPose::SleepBreath => &SLEEP_BREATH_SHAPE,
+        BodyPose::Rising => &RISING_SHAPE,
     };
-    sprite_grid(shape, expression, hop, palette)
+    sprite_grid(shape, pose, expression, hop, palette)
 }
 
 pub(super) fn sprite_12_with_pose(
@@ -286,15 +416,18 @@ pub(super) fn sprite_12_with_pose(
     let shape = match pose {
         BodyPose::Neutral => &SHAPE_12,
         BodyPose::Squish => &SQUISH_SHAPE_12,
+        BodyPose::Sleep => &SLEEP_SHAPE_12,
+        BodyPose::SleepBreath => &SLEEP_BREATH_SHAPE_12,
+        BodyPose::Rising => &RISING_SHAPE_12,
     };
-    sprite_grid(shape, expression, hop, palette)
+    sprite_grid(shape, pose, expression, hop, palette)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const EXPRESSIONS: [Expression; 9] = [
+    const EXPRESSIONS: [Expression; 14] = [
         Expression::Idle,
         Expression::LookLeft,
         Expression::LookRight,
@@ -304,13 +437,18 @@ mod tests {
         Expression::Surprised,
         Expression::Confused,
         Expression::Blink,
+        Expression::Wink,
+        Expression::Skeptical,
+        Expression::Sleepy,
+        Expression::LookDown,
+        Expression::Sleep,
     ];
 
-    fn check_outline<const N: usize>(shape: &[&str; N]) {
+    fn check_outline<const N: usize>(shape: &[&str; N], pose: BodyPose) {
         assert!(shape.iter().all(|row| row.len() == N));
         for expression in EXPRESSIONS {
             for palette in super::super::PALETTES {
-                let pixels = sprite_grid(shape, expression, 0, palette);
+                let pixels = sprite_grid(shape, pose, expression, 0, palette);
                 for (y, row) in pixels.iter().enumerate() {
                     for (x, pixel) in row.iter().enumerate() {
                         assert_eq!(pixel.is_some(), shape[y].as_bytes()[x] == b'#');
@@ -328,7 +466,11 @@ mod tests {
                     }
                 }
                 let expected_eye_pixels = match expression {
-                    Expression::Focused | Expression::Blink => 4,
+                    Expression::Focused
+                    | Expression::Blink
+                    | Expression::Sleepy
+                    | Expression::Sleep => 4,
+                    Expression::Wink | Expression::Skeptical => 6,
                     Expression::Surprised => 12,
                     _ => 8,
                 };
@@ -347,10 +489,24 @@ mod tests {
 
     #[test]
     fn both_resolutions_and_poses_preserve_outlines_and_palette_colors() {
-        check_outline(&SHAPE);
-        check_outline(&SQUISH_SHAPE);
-        check_outline(&SHAPE_12);
-        check_outline(&SQUISH_SHAPE_12);
+        for (shape, pose) in [
+            (&SHAPE, BodyPose::Neutral),
+            (&SQUISH_SHAPE, BodyPose::Squish),
+            (&SLEEP_SHAPE, BodyPose::Sleep),
+            (&SLEEP_BREATH_SHAPE, BodyPose::SleepBreath),
+            (&RISING_SHAPE, BodyPose::Rising),
+        ] {
+            check_outline(shape, pose);
+        }
+        for (shape, pose) in [
+            (&SHAPE_12, BodyPose::Neutral),
+            (&SQUISH_SHAPE_12, BodyPose::Squish),
+            (&SLEEP_SHAPE_12, BodyPose::Sleep),
+            (&SLEEP_BREATH_SHAPE_12, BodyPose::SleepBreath),
+            (&RISING_SHAPE_12, BodyPose::Rising),
+        ] {
+            check_outline(shape, pose);
+        }
     }
 
     #[test]
@@ -390,14 +546,14 @@ mod tests {
         }
     }
 
-    fn check_hops<const N: usize>(shape: &[&str; N]) {
+    fn check_hops<const N: usize>(shape: &[&str; N], pose: BodyPose) {
         assert!(shape[..2].iter().all(|row| row.bytes().all(|p| p == b'.')));
         assert!(shape[N - 1].bytes().all(|p| p == b'.'));
         for expression in EXPRESSIONS {
-            let grounded = sprite_grid(shape, expression, 0, Palette::MINT);
+            let grounded = sprite_grid(shape, pose, expression, 0, Palette::MINT);
             let occupied = grounded.iter().flatten().filter(|p| p.is_some()).count();
             for hop in [1, 2, usize::MAX] {
-                let lifted = sprite_grid(shape, expression, hop, Palette::MINT);
+                let lifted = sprite_grid(shape, pose, expression, hop, Palette::MINT);
                 let hop = hop.min(2);
                 assert_eq!(lifted[..N - hop], grounded[hop..]);
                 assert!(lifted[N - hop..].iter().flatten().all(Option::is_none));
@@ -412,10 +568,24 @@ mod tests {
 
     #[test]
     fn hopping_moves_body_and_face_together_and_clears_the_bottom() {
-        check_hops(&SHAPE);
-        check_hops(&SQUISH_SHAPE);
-        check_hops(&SHAPE_12);
-        check_hops(&SQUISH_SHAPE_12);
+        for (shape, pose) in [
+            (&SHAPE, BodyPose::Neutral),
+            (&SQUISH_SHAPE, BodyPose::Squish),
+            (&SLEEP_SHAPE, BodyPose::Sleep),
+            (&SLEEP_BREATH_SHAPE, BodyPose::SleepBreath),
+            (&RISING_SHAPE, BodyPose::Rising),
+        ] {
+            check_hops(shape, pose);
+        }
+        for (shape, pose) in [
+            (&SHAPE_12, BodyPose::Neutral),
+            (&SQUISH_SHAPE_12, BodyPose::Squish),
+            (&SLEEP_SHAPE_12, BodyPose::Sleep),
+            (&SLEEP_BREATH_SHAPE_12, BodyPose::SleepBreath),
+            (&RISING_SHAPE_12, BodyPose::Rising),
+        ] {
+            check_hops(shape, pose);
+        }
     }
 
     fn bounds(shape: &[&str]) -> (usize, usize, usize, usize) {
@@ -434,6 +604,41 @@ mod tests {
             occupied.iter().map(|&(_, y)| y).min().unwrap(),
             occupied.iter().map(|&(_, y)| y).max().unwrap(),
         )
+    }
+
+    #[test]
+    fn sleep_is_low_and_footless_breathing_keeps_its_baseline_and_rising_unfolds_feet() {
+        for (standing, sleep, breath, rising) in [
+            (
+                &SHAPE[..],
+                &SLEEP_SHAPE[..],
+                &SLEEP_BREATH_SHAPE[..],
+                &RISING_SHAPE[..],
+            ),
+            (
+                &SHAPE_12[..],
+                &SLEEP_SHAPE_12[..],
+                &SLEEP_BREATH_SHAPE_12[..],
+                &RISING_SHAPE_12[..],
+            ),
+        ] {
+            let (_, _, top, baseline) = bounds(standing);
+            let (left, right, sleep_top, sleep_bottom) = bounds(sleep);
+            let (_, _, breath_top, breath_bottom) = bounds(breath);
+            let (_, _, rising_top, rising_bottom) = bounds(rising);
+            assert_eq!(sleep_bottom, baseline);
+            assert_eq!(breath_bottom, baseline);
+            assert_eq!(rising_bottom, baseline);
+            assert_eq!(breath_top + 1, sleep_top);
+            assert!(top < rising_top && rising_top < sleep_top);
+            assert!(right - left > baseline - sleep_top);
+            // No foot gap or aerial: every occupied sleep row is one solid run.
+            for row in sleep.iter().chain(breath) {
+                assert!(!row.trim_matches('.').contains('.'));
+            }
+            assert!(rising[baseline].contains(".."));
+            assert_eq!(rising[baseline], standing[baseline]);
+        }
     }
 
     #[test]

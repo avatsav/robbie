@@ -10,7 +10,7 @@ use ratatui_image::{
     protocol::Protocol,
 };
 
-use super::{ERROR, IDLE, IMAGE_SIZE as SIZE, Moment, PALETTES, SUCCESS, THINKING, WORKING};
+use super::{IMAGE_SIZE as SIZE, Moment, PALETTES, all_moments};
 
 pub(super) struct Graphics {
     frames: Vec<(Sprite, Protocol)>,
@@ -36,13 +36,7 @@ impl Graphics {
         let font = picker.font_size();
         let mut frames: Vec<(Sprite, Protocol)> = Vec::new();
         for palette in PALETTES {
-            for moment in IDLE
-                .iter()
-                .chain(THINKING)
-                .chain(WORKING)
-                .chain(SUCCESS)
-                .chain(ERROR)
-            {
+            for moment in all_moments() {
                 let pixels = sprite_with_pose(moment.expression, moment.hop, moment.pose, palette);
                 if frames.iter().any(|(cached, _)| *cached == pixels) {
                     continue;
@@ -79,7 +73,7 @@ fn canvas(pixels: &Sprite, font: FontSize) -> Option<RgbaImage> {
     }
     let side = SPRITE_SIZE as u32 * scale;
     let left = (width - side) / 2;
-    // Both source poses leave the last sprite row transparent. Anchor their
+    // Every source pose leaves the last sprite row transparent. Anchor their
     // shared grounded baseline at the canvas bottom instead of centering that
     // empty row. Keep this offset fixed across frames so hops still lift up.
     let top = height - (SPRITE_SIZE as u32 - 1) * scale;
@@ -120,13 +114,7 @@ mod tests {
             let graphics = Graphics::from_picker(&picker).unwrap();
             let mut unique = Vec::new();
             for palette in PALETTES {
-                for moment in IDLE
-                    .iter()
-                    .chain(THINKING)
-                    .chain(WORKING)
-                    .chain(SUCCESS)
-                    .chain(ERROR)
-                {
+                for moment in all_moments() {
                     let pixels =
                         sprite_with_pose(moment.expression, moment.hop, moment.pose, palette);
                     if !unique.contains(&pixels) {
@@ -147,6 +135,9 @@ mod tests {
                 }
             }
             assert_eq!(graphics.frames.len(), unique.len());
+            for palette in PALETTES {
+                assert!(graphics.frame(super::super::NEUTRAL, palette).is_some());
+            }
         }
     }
 
@@ -188,6 +179,52 @@ mod tests {
             }
         }
         assert!((42..48).all(|y| (0..48).all(|x| hopped.get_pixel(x, y).0[3] == 0)));
+    }
+
+    #[test]
+    fn every_scene_canvas_preserves_pixels_and_the_grounded_baseline() {
+        for font in [FontSize::new(8, 16), FontSize::new(12, 24)] {
+            let width = u32::from(font.width) * u32::from(SIZE.width);
+            let height = u32::from(font.height) * u32::from(SIZE.height);
+            let scale = width.min(height) / SPRITE_SIZE as u32;
+            let left = (width - SPRITE_SIZE as u32 * scale) / 2;
+            let top = height - (SPRITE_SIZE as u32 - 1) * scale;
+            for moment in all_moments() {
+                let pixels =
+                    sprite_with_pose(moment.expression, moment.hop, moment.pose, Palette::MINT);
+                let image = canvas(&pixels, font).unwrap();
+                let mut occupied = 0;
+                for (y, row) in pixels.iter().enumerate() {
+                    for (x, pixel) in row.iter().enumerate() {
+                        if let Some(Rgb(r, g, b)) = pixel {
+                            occupied += 1;
+                            for dy in 0..scale {
+                                for dx in 0..scale {
+                                    assert_eq!(
+                                        image
+                                            .get_pixel(
+                                                left + x as u32 * scale + dx,
+                                                top + y as u32 * scale + dy
+                                            )
+                                            .0,
+                                        [*r, *g, *b, 255]
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                assert_eq!(
+                    image.pixels().filter(|p| p.0[3] != 0).count(),
+                    occupied * (scale * scale) as usize
+                );
+                // Every grounded pose touches the bottom of the canvas. Hops
+                // lift the same baseline instead of re-centering the image.
+                if moment.hop == 0 {
+                    assert!((0..width).any(|x| image.get_pixel(x, height - 1).0[3] != 0));
+                }
+            }
+        }
     }
 
     #[test]

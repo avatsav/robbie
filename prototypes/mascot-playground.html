@@ -1,0 +1,820 @@
+<!doctype html>
+<!-- Reusable mascot playground: explore Robbie's expressions and idle rhythm.
+     Open this file directly; no server, dependencies, or persistent storage.
+     Three views: ?variant=A (stage), B (contact sheet), C (terminal context).
+     Production references: ../src/ui/mascot/{sprite,scenes,idle}.rs and
+     ../src/ui/mascot.rs. This is a self-contained exploration copy, not wired
+     to the Rust implementation: changes here do not change Robbie itself. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robbie · Idle expression playground</title>
+<style>
+  :root { color-scheme: dark; --bg:#101315; --panel:#181d20; --line:#30383c; --text:#e7ece9; --muted:#9ba9a5; --accent:#6ddfb5; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,sans-serif; }
+  button,select,input,textarea { font:inherit; }
+  .policy { padding:18px 20px; margin-bottom:18px; }
+  .policy .state-grid { margin-bottom:16px; }
+  .policy-actions { gap:7px; margin-top:10px; }
+  .policy-actions button { font-size:12px; padding:7px 10px; }
+  .policy-log { margin:12px 0 0; padding:0; list-style:none; max-height:140px; overflow:auto; font:11px/1.8 ui-monospace,monospace; color:var(--muted); }
+  .policy-log time { color:var(--accent); margin-right:9px; }
+  .walkthrough { border-top:1px solid var(--line); padding-top:12px; margin-top:16px; }
+  .scenario-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .scenario-tabs button { padding:5px 8px; font-size:11px; }
+  #walk-steps button { font-size:12px; }
+  #walk-steps button:disabled { opacity:.4; cursor:default; }
+  #draft { resize:none; width:100%; min-height:26px; background:transparent; color:var(--text); border:0; outline-offset:2px; padding:0; line-height:1.7; }
+  #draft::placeholder { color:#718177; }
+  .policy-status { color:var(--accent); }
+  body[data-mode="solo"] .policy { display:none; }
+  body[data-mode="policy"] .card.selected { border-color:#4c6257; }
+  button,select { color:inherit; background:#20272a; border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+  button[aria-pressed="true"] { background:#223c33; border-color:var(--accent); }
+  input { accent-color:var(--accent); }
+  input[type="range"] { width:100%; }
+  h1,h2,h3,p { margin:0; }
+  h1 { font-size:24px; letter-spacing:-.7px; font-weight:650; }
+  h2 { font-size:19px; letter-spacing:-.4px; }
+  h3 { font-size:13px; font-weight:600; }
+  small,.muted { color:var(--muted); }
+  header { display:flex; justify-content:space-between; align-items:center; gap:24px; max-width:1440px; margin:auto; padding:32px 32px 24px; }
+  header p { color:var(--muted); margin-top:6px; max-width:720px; }
+  .eyebrow { color:var(--accent); font:11px/1.5 ui-monospace,monospace; letter-spacing:2px; text-transform:uppercase; margin-bottom:7px; }
+  .badge { color:var(--accent); border:1px solid #365347; padding:5px 10px; border-radius:20px; white-space:nowrap; font:11px ui-monospace,monospace; }
+  main { max-width:1440px; padding:0 32px 104px; margin:auto; }
+  .workspace { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; align-items:start; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+  .panel-head { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; gap:12px; }
+  .stage { min-height:320px; display:flex; justify-content:center; align-items:center; gap:48px; position:relative; background-color:#121819; background-image:radial-gradient(#34413d 1px,transparent 1px); background-size:16px 16px; }
+  .sprite-well { text-align:center; }
+  canvas { image-rendering:pixelated; display:block; margin:auto; }
+  #hero { width:calc(var(--pixels,16) * 15px); height:calc(var(--pixels,16) * 15px); }
+  #companion { width:calc(var(--pixels,12) * 8px); height:calc(var(--pixels,12) * 8px); }
+  .sprite-well span { display:block; margin-top:12px; color:var(--muted); font:11px ui-monospace,monospace; }
+  .stage-tag { position:absolute; left:18px; top:14px; color:var(--muted); font:11px ui-monospace,monospace; }
+  .description { padding:18px 20px; border-top:1px solid var(--line); }
+  .description p { margin-top:6px; color:var(--muted); }
+  .controls { padding:18px 20px; }
+  .control-group + .control-group { border-top:1px solid var(--line); margin-top:18px; padding-top:18px; }
+  .label { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; color:var(--muted); }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .row > select { flex:1; min-width:0; }
+  .palette { display:flex; gap:9px; }
+  .swatch { width:30px; height:30px; padding:0; background:var(--swatch); border:3px solid var(--panel); border-radius:50%; outline:1px solid var(--line); }
+  .swatch[aria-pressed="true"] { background:var(--swatch); outline:2px solid var(--text); border-color:var(--panel); }
+  .small { font-size:12px; }
+  .hint { color:var(--muted); font-size:12px; margin-top:10px; }
+  .wide { width:100%; }
+  .transport { padding:16px 20px; border-top:1px solid var(--line); }
+  .transport .row { justify-content:space-between; }
+  .readout { font:11px ui-monospace,monospace; color:var(--muted); }
+  .timeline { display:flex; gap:4px; margin-top:12px; overflow-x:auto; padding-bottom:8px; }
+  .frame { min-width:58px; flex:1; padding:7px 5px; text-align:center; border-radius:6px; }
+  .frame canvas { width:calc(var(--pixels,16) * 3px); height:calc(var(--pixels,16) * 3px); margin-bottom:5px; }
+  .frame span { color:var(--muted); font:10px ui-monospace,monospace; }
+  .state { margin-top:18px; padding:16px 20px; }
+  .state-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:12px; }
+  .state dt { color:var(--muted); font-size:11px; }
+  .state dd { margin:3px 0 0; font:12px ui-monospace,monospace; }
+  details { margin-top:16px; border-top:1px solid var(--line); padding-top:12px; }
+  summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  pre { overflow:auto; font-size:11px; max-height:260px; color:#b0c2ba; }
+  .library { margin-top:24px; }
+  .library-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+  .card { border:1px solid var(--line); border-radius:12px; background:var(--panel); overflow:hidden; }
+  .card.selected { border-color:var(--accent); }
+  .card-pick { display:block; width:100%; background:transparent; border:0; border-radius:0; padding:16px; text-align:left; }
+  .card-pick canvas { width:calc(var(--pixels,16) * 5px); height:calc(var(--pixels,16) * 5px); margin:4px auto 14px; }
+  .card-pick strong { display:block; font-size:13px; }
+  .card-pick small { font-size:11px; }
+  .card-foot { display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--line); padding:9px 14px; font-size:11px; color:var(--muted); }
+  .card-foot label { cursor:pointer; display:flex; align-items:center; gap:5px; }
+  .tag { font:10px ui-monospace,monospace; color:var(--accent); }
+  .terminal { display:none; background:#131617; padding:22px 24px; font:13px/1.7 ui-monospace,monospace; min-height:350px; }
+  .terminal-top { color:#7f9089; font-size:11px; margin-bottom:24px; display:flex; gap:6px; align-items:center; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#46514b; }
+  .terminal .prompt { color:#e3a76c; }
+  .terminal .answer { max-width:590px; margin:12px 0 30px; color:#c4cfc9; }
+  .input-panel { position:relative; border-block:1px solid #6b7971; margin-top:35px; min-height:54px; padding:12px 112px 12px 0; }
+  .cursor { display:inline-block; background:#cbd7ce; width:7px; height:15px; vertical-align:middle; }
+  #terminal-bot { position:absolute; right:10px; bottom:7px; width:72px; height:48px; }
+  .terminal-meta { color:#84958a; font-size:11px; display:flex; justify-content:space-between; gap:10px; margin-top:5px; }
+  .terminal-note { margin-top:26px; font:11px/1.6 system-ui,sans-serif; color:var(--muted); }
+  .view-switch { display:flex; gap:16px; align-items:center; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#e2eee6; color:#183529; border:1px solid #fff4; border-radius:30px; padding:8px; box-shadow:0 8px 40px #0008; z-index:3; white-space:nowrap; }
+  .view-switch button { background:transparent; color:inherit; border:0; padding:5px 12px; font-size:20px; }
+  .view-switch span { min-width:150px; text-align:center; font-size:12px; }
+  .view-switch b { margin-right:7px; }
+  [hidden] { display:none !important; }
+  body[data-view="B"] .workspace { grid-template-columns:minmax(0,1fr) 310px; }
+  body[data-view="B"] .stage { min-height:190px; }
+  body[data-view="B"] #hero { width:calc(var(--pixels,16) * 8px); height:calc(var(--pixels,16) * 8px); }
+  body[data-view="B"] #companion { width:calc(var(--pixels,12) * 5px); height:calc(var(--pixels,12) * 5px); }
+  body[data-view="B"] .library { grid-column:1; grid-row:2; margin-top:0; }
+  body[data-view="B"] .cards { grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
+  body[data-view="B"] .controls { grid-column:2; grid-row:1 / span 2; }
+  body[data-view="C"] .stage { display:none; }
+  body[data-view="C"] .terminal { display:block; }
+  @media(max-width:800px) {
+    header { padding:22px 18px; } header .badge { display:none; }
+    main { padding:0 16px 100px; }
+    .workspace,body[data-view="B"] .workspace { display:flex; flex-direction:column; }
+    .workspace > * { width:100%; }
+    .controls { order:2; } .library { order:3; }
+    .stage { gap:16px; min-height:280px; }
+    #hero { width:calc(var(--pixels,16) * 11px); height:calc(var(--pixels,16) * 11px); }
+    #companion { width:calc(var(--pixels,12) * 6px); height:calc(var(--pixels,12) * 6px); }
+    .state-grid { grid-template-columns:repeat(2,1fr); }
+    .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .terminal { padding:18px; } .terminal-meta { font-size:9px; }
+  }
+</style>
+</head>
+<body data-view="C" data-mode="policy">
+<header>
+  <div><div class="eyebrow">Robbie / motion studies</div><h1>Quiet company, with a little personality.</h1><p>Does Robbie’s idle rhythm feel right? Watch the live policy: mostly quiet emotes, sleepy after a minute, then curled up asleep after 90 seconds. Type to gently wake Robbie: stir, stand, blink, then idle. Or fast-forward to explore the timing.</p></div>
+  <span class="badge">MASCOT PLAYGROUND</span>
+</header>
+<main>
+  <div class="workspace">
+    <div id="preview-column">
+      <section class="panel policy" aria-label="Live scheduling policy">
+        <div class="row" style="justify-content:space-between"><h2>Live idle policy</h2><div class="row"><button type="button" id="policy-pause">Pause</button><span class="policy-status" id="policy-status"></span></div></div>
+        <dl class="state-grid"><div><dt>Since interaction</dt><dd id="policy-away"></dd></div><div><dt>Next change</dt><dd id="policy-next"></dd></div><div><dt>Idle mood</dt><dd id="policy-mood"></dd></div><div><dt>Hop cooldown</dt><dd id="policy-hop"></dd></div></dl>
+        <div class="row policy-actions"><button id="interact" type="button">⌨ Type / wake up</button><button id="away" type="button">☾ Simulate a minute away</button><button id="sleep-now" type="button">☾ Preview full sleep</button><button id="skip" type="button">+10 seconds</button><button id="policy-reset" type="button">↺ Fresh start</button></div>
+        <div class="row policy-actions"><button id="submit" type="button">Submit / thinking</button><button id="working" type="button">Tool working</button><button id="success" type="button">Finish successfully</button><button id="error" type="button">Finish with error</button></div>
+        <p class="hint">Type in the terminal prompt below to try a real interruption. Preview controls do not count as typing. All clocks follow the playback speed; Pause freezes them.</p>
+        <details><summary>Why did Robbie do that?</summary><ol id="policy-log" class="policy-log" aria-label="Recent scheduling decisions"></ol></details>
+        <details class="walkthrough" id="walkthrough"><summary>Guided scenarios · explore the awkward transitions</summary><div class="scenario-tabs" id="scenario-tabs" aria-label="Guided scenarios" style="margin-top:12px"></div><p class="hint" id="walk-description"></p><div class="row policy-actions" id="walk-steps"></div></details>
+      </section>
+      <section class="panel" aria-label="Selected animation preview">
+        <div class="panel-head"><h2 id="scene-title"></h2><span class="tag" id="scene-kind"></span></div>
+        <div class="stage">
+          <span class="stage-tag">INTEGER PIXELS · 50 ms TICK</span>
+          <div class="sprite-well"><canvas id="hero" aria-label="Selected sprite enlarged"></canvas><span id="hero-label"></span></div>
+          <div class="sprite-well"><canvas id="companion" aria-label="Other sprite resolution"></canvas><span id="companion-label"></span></div>
+        </div>
+        <div class="terminal">
+          <div class="terminal-top"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span style="margin-left:8px" id="terminal-activity">robbie — idle / no active turn</span></div>
+          <div class="prompt">› Let's make something small and delightful.</div>
+          <div class="answer">A little personality goes a long way.<br>I'll be right here when you're ready.</div>
+          <div class="input-panel"><textarea id="draft" rows="1" aria-label="Simulated Robbie prompt" placeholder="Type here… Robbie will leave you to it."></textarea><canvas id="terminal-bot" aria-label="Mascot at approximate terminal scale"></canvas></div>
+          <div class="terminal-meta"><span>~/Development/robbie · main</span><span>ctrl+o concise · claude</span></div>
+          <p class="terminal-note" id="terminal-note"></p>
+        </div>
+        <div class="description"><h3 id="scene-intent"></h3><p id="scene-description"></p></div>
+        <div class="transport">
+          <div class="row"><div class="row"><button id="play" type="button">Pause</button><button id="restart" type="button" title="Restart selected animation">↺ Restart</button><button id="step" type="button" title="Pause and advance one 50 ms tick">+50 ms</button></div><output class="readout" id="clock"></output></div>
+          <label class="label" for="scrub" style="margin:14px 0 2px"><span>Timeline · click a pose to inspect it</span><span id="playback-mode"></span></label>
+          <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Animation position">
+          <div class="timeline" id="timeline" aria-label="Animation poses"></div>
+        </div>
+      </section>
+      <section class="panel state" aria-label="Live animation state">
+        <div class="row" style="justify-content:space-between"><h3>Under the pixels</h3><span class="readout" id="rest-state"></span></div>
+        <dl class="state-grid"><div><dt>Expression</dt><dd id="state-expression"></dd></div><div><dt>Body pose</dt><dd id="state-pose"></dd></div><div><dt>Hop</dt><dd id="state-hop"></dd></div><div><dt>Moment</dt><dd id="state-moment"></dd></div></dl>
+        <details><summary>Selected scene data · prototype only</summary><pre id="scene-data"></pre></details>
+      </section>
+    </div>
+    <aside class="panel controls" aria-label="Playground settings">
+      <div class="control-group"><div class="label"><span>Body palette</span><output id="palette-name">Mint</output></div><div id="palettes" class="palette"></div></div>
+      <div class="control-group"><label class="label" for="resolution">Primary pixel grid</label><select class="wide" id="resolution"><option value="16">16 × 16 · image sprite</option><option value="12">12 × 12 · tiled fallback</option></select><p class="hint">Both are hand-drawn grids, not rescaled copies. The other grid stays alongside for comparison.</p></div>
+      <div class="control-group"><label class="label" for="speed"><span>Playback speed</span><output id="speed-label">1×</output></label><input id="speed" type="range" min="0.25" max="10" step="0.25" value="1"><p class="hint">1× for real pacing. Up to 10× to explore a longer idle.</p></div>
+      <div class="control-group"><div class="label"><span>Playback mode</span></div><button class="wide" id="mix" aria-pressed="true" type="button">Live policy: on</button><p class="hint">Live policy schedules the checked scenes. Click a card or pose to leave the policy and inspect a single loop; click here to return.</p></div>
+      <div class="control-group"><h3>The proposed rhythm</h3><p class="hint">80% everyday · 20% playful.<br>Neutral rests: 6–12 seconds.<br>Typing: neutral until 3 seconds quiet.<br>Both hops share a 60-second cooldown.<br>60 seconds idle → sleepy nods.<br>90 seconds → tuck in and sleep.<br>Asleep: slow breathing, no idle emotes.<br>On return: stir → stand → blink → idle.<br>Typing keeps the wake-up moving; submit skips straight to thinking.</p><p class="hint">Each group uses a shuffled bag, avoiding immediate repeats. Busy and completion scenes take priority. Completion settles before the palette advances.</p></div>
+      <div class="control-group"><div class="label"><span>Shortlist</span><output id="shortlist-count"></output></div><button class="wide" id="export" type="button">↓ Export checked scenes</button><p class="hint">Downloads JSON with palettes, geometry, and pose timings. No changes to Robbie; choices live only in this tab.</p></div>
+      <div class="control-group"><h3>Keep it Robbie</h3><p class="hint">No extra limbs, particles, rotation, or smooth scaling. Pixel eyes, squish, and a maximum two-pixel hop while awake. Sleep adds a low, footless body with a one-pixel breath.</p><p class="hint">All 13 scenes are included. The policy decides which ones belong in the moment; uncheck a scene to explore a smaller repertoire.</p></div>
+    </aside>
+  </div>
+  <section class="library" id="library"><div class="library-head"><div><h2>The idle repertoire</h2><p class="hint" style="margin-top:4px">Click to play. Check scenes to include in the live policy and export.</p></div><span class="readout">13 idle scenes + wake-up study</span></div><div class="cards" id="cards"></div></section>
+</main>
+<nav class="view-switch" aria-label="Preview view"><button id="view-prev" type="button" aria-label="Previous view">←</button><span><b id="view-key">A</b><span id="view-name">Pixel stage</span></span><button id="view-next" type="button" aria-label="Next view">→</button></nav>
+<script>
+'use strict';
+// Standing silhouettes from sprite.rs; footless sleep poses are new proposals.
+// No browser interpolation or vector transforms.
+const SHAPES = {
+  16: {
+    Neutral: ['................','................','.......##.......','.......##.......','...##########...','..############..','..############..','..############..','..############..','..############..','..############..','..############..','...##########...','....###..###....','....###..###....','................'],
+    Squish: ['................','................','................','.......##.......','.......##.......','..############..','.##############.','.##############.','.##############.','.##############.','.##############.','.##############.','..############..','...####..####...','...####..####...','................'],
+    Sleep: ['................','................','................','................','................','................','................','................','................','...##########...','..############..','.##############.','.##############.','..############..','...##########...','................'],
+    SleepBreath: ['................','................','................','................','................','................','................','................','...##########...','..############..','.##############.','.##############.','.##############.','..############..','...##########...','................'],
+    Rising: ['................','................','................','................','................','.......##.......','.......##.......','...##########...','..############..','..############..','..############..','..############..','...##########...','....###..###....','....###..###....','................']
+  },
+  12: {
+    Neutral: ['............','............','.....##.....','..########..','.##########.','.##########.','.##########.','.##########.','.##########.','...##..##...','...##..##...','............'],
+    Squish: ['............','............','............','.....##.....','.##########.','############','############','############','############','..###..###..','..###..###..','............'],
+    Sleep: ['............','............','............','............','............','............','..########..','.##########.','############','.##########.','..########..','............'],
+    SleepBreath: ['............','............','............','............','............','..########..','.##########.','############','############','.##########.','..########..','............'],
+    Rising: ['............','............','............','............','.....##.....','..########..','.##########.','.##########.','.##########.','...##..##...','...##..##...','............']
+  }
+};
+const PALETTES = {
+  Mint:['#c9ffe2','#6ddfb5','#309b86','#183e40'],
+  Blue:['#a7e5ff','#54b4ef','#2877c0','#172d48'],
+  Lilac:['#edceff','#b48aec','#7556b7','#302447'],
+  Amber:['#ffe39a','#ffbf56','#c97a2a','#56321f'],
+  Pink:['#ffd2e2','#f28cb0','#bb547d','#48273a'],
+  Lime:['#e8ffa5','#b6de60','#699a3d','#304325']
+};
+const m = (expression, ms, pose='Neutral', hop=0) => ({expression, hop, pose, ms});
+const idle = ms => m('Idle', ms);
+const blink = () => m('Blink', 100);
+const SCENES = [
+  {id:'original', name:'Original idle', kind:'REFERENCE', energy:'quiet', intent:'The current baseline', description:'The exact 1.88-second production loop: left glance, blink, settle, right glance. Compare the new ideas against this.', preview:1,
+    frames:[idle(600),m('LookLeft',350),blink(),idle(480),m('LookRight',350)]},
+  {id:'double-blink', name:'Double blink', kind:'CANDIDATE', energy:'quiet', intent:'A tiny “still here”', description:'Two quick blinks, then plenty of stillness. A low-distraction candidate for the everyday idle pool.', preview:1,
+    frames:[idle(800),blink(),idle(150),blink(),idle(1600)]},
+  {id:'look-around', name:'Looking around', kind:'CANDIDATE', energy:'quiet', intent:'Taking in the room', description:'A deliberate glance in each direction, separated by a neutral pose. Slower and less metronomic than the current idle loop.', preview:1,
+    frames:[idle(650),m('LookLeft',600),idle(300),m('LookRight',650),blink(),idle(1100)]},
+  {id:'curious', name:'Curious', kind:'CANDIDATE', energy:'quiet', intent:'Something caught my eye', description:'One eye lifts, then both look up. A little question without an error, a warning, or a whole-body gesture.', preview:1,
+    frames:[idle(700),m('Confused',450),m('Thinking',650),m('Confused',300),blink(),idle(1100)]},
+  {id:'wink', name:'A little wink', kind:'CANDIDATE', energy:'playful', intent:'A small shared joke', description:'One eye closes while the other stays open. A new asymmetric eye pattern; the boxy silhouette stays completely still.', preview:1,
+    frames:[idle(800),m('Wink',260),idle(200),m('Happy',400),idle(1200)]},
+  {id:'daydream', name:'Daydream', kind:'CANDIDATE', energy:'quiet', intent:'Eyes wandering, feet planted', description:'Look up, drift to the side, and blink back to the present. A slower, softer alternative to repeated side-to-side scanning.', preview:1,
+    frames:[idle(800),m('Thinking',1000),m('LookRight',700),blink(),idle(1300)]},
+  {id:'sleepy', name:'Sleepy nod', kind:'CANDIDATE', energy:'rare', intent:'Maybe it has been a while…', description:'Half-lidded eyes close into a bottom-anchored squish, then wake with a double blink. Best reserved for a genuinely long idle.', preview:2,
+    frames:[idle(900),m('Sleepy',800),m('Blink',650,'Squish'),m('Sleepy',350),blink(),idle(150),blink(),idle(1400)]},
+  {id:'startle', name:'Oh! Hello.', kind:'CANDIDATE', energy:'rare', intent:'A tiny surprised hop', description:'A brief wide-eyed, one-pixel hop followed by a soft landing. More attention-seeking; compare it at terminal size before choosing.', preview:2,
+    frames:[idle(800),m('Surprised',150,'Squish'),m('Surprised',150,'Neutral',1),m('Idle',120,'Squish'),m('Confused',400),idle(1300)]},
+  {id:'happy-bounce', name:'Happy bounce', kind:'CANDIDATE', energy:'rare', intent:'Quietly delighted', description:'A single happy bounce using the existing two-pixel headroom. Intentionally smaller than the production success celebration.', preview:2,
+    frames:[idle(850),m('Happy',120,'Squish'),m('Happy',180,'Neutral',2),m('Happy',130,'Squish'),m('Happy',450),idle(1400)]},
+  {id:'content', name:'Content', kind:'CANDIDATE', energy:'quiet', intent:'Nothing to do. That’s okay.', description:'Happy eyes with one gentle squish, no jump. A friendly idle beat that does not look like work has just completed.', preview:1,
+    frames:[idle(900),m('Happy',450),m('Happy',200,'Squish'),m('Happy',500),blink(),idle(1500)]},
+  {id:'skeptical', name:'Really?', kind:'CANDIDATE', energy:'playful', intent:'A little side-eye', description:'One flat eye and one raised eye, followed by a sideways glance. A new face pattern with a more opinionated personality.', preview:1,
+    frames:[idle(750),m('Skeptical',650),m('LookLeft',450),m('Skeptical',350),blink(),idle(1200)]},
+  {id:'peek', name:'Small & shy', kind:'CANDIDATE', energy:'playful', intent:'Just a little bashful', description:'Eyes dip down into a compact squish, then peek back up. Another new eye pattern, built within the same silhouette and palette.', preview:2,
+    frames:[idle(800),m('LookDown',450),m('LookDown',350,'Squish'),m('Wink',220,'Squish'),idle(400),blink(),idle(1300)]},
+  {id:'sleep', name:'Sound asleep', kind:'CANDIDATE', energy:'after 90 s', intent:'Feet tucked in. Nothing to do.', description:'A low, wide, footless body resting on the same baseline. Closed eyes and one very slow pixel breath. No blinks, glances, or hops until you return.', preview:0,
+    frames:[m('Sleep',2700,'Sleep'),m('Sleep',1100,'SleepBreath'),m('Sleep',2200,'Sleep')]}
+];
+const FALL_ASLEEP={id:'fall-asleep',name:'Tucking in',kind:'TRANSITION',energy:'after 90 s',intent:'Idle → sleepy → asleep',description:'The sleepy bot closes its eyes, folds its feet away, and settles into the lying-down pose. Typing interrupts even this transition.',preview:2,
+  frames:[m('Sleepy',550),m('Blink',550,'Squish'),m('Sleep',1200,'Sleep')]};
+const WAKE_UP={id:'wake-up',name:'A gentle wake-up',kind:'TRANSITION',energy:'on return',intent:'Stir → stand → blink → idle',description:'One sleepy stir, feet slowly unfolding, a little blink, and back to neutral. About 1.2 seconds; more typing never restarts it. Submitting goes straight to thinking.',preview:2,
+  frames:[m('Sleep',140,'Sleep'),m('Sleepy',180,'SleepBreath'),m('Sleepy',200,'Rising'),m('Blink',140,'Squish'),m('Sleepy',200),blink(),idle(220)]};
+const WAKE_DROWSY={id:'wake-drowsy',name:'Shaking off a sleepy nod',kind:'TRANSITION',energy:'on return',intent:'Already standing, just a little drowsy',description:'A smaller wake-up for a bot that has not lain down yet: lift the eyelids, blink, and settle. No sudden drop into the sleeping silhouette.',preview:0,
+  frames:[m('Sleepy',200),blink(),idle(220)]};
+const LIBRARY=[...SCENES,WAKE_UP];
+// Production activity scenes, included only to explore idle interruptions.
+const TURN_SCENES = [
+  {id:'thinking',name:'Thinking',frames:[m('Thinking',480),m('Thinking',170,'Squish'),m('Thinking',530),blink(),m('Thinking',440)]},
+  {id:'working',name:'Working',frames:[m('Focused',440),m('Focused',120,'Neutral',1),m('Focused',440)]},
+  {id:'success',name:'Success',frames:[idle(220),m('Happy',90,'Squish'),m('Happy',140,'Neutral',2),m('Happy',100,'Squish'),m('Happy',130,'Neutral',1),m('Happy',110,'Squish'),m('Happy',360),idle(460)]},
+  {id:'error',name:'Error',frames:[m('Surprised',170),m('Surprised',120,'Squish'),m('Confused',380),m('LookLeft',350),idle(460)]}
+].map(s=>({...s,kind:'ACTIVITY',intent:'Activity takes priority over idle',description:'Existing production scene. The idle policy waits until this activity has finished.',preview:0}));
+const CATALOG = Object.fromEntries([...LIBRARY,FALL_ASLEEP,WAKE_DROWSY,...TURN_SCENES].map(s=>[s.id,s]));
+</script>
+<script>
+'use strict';
+// Pure scheduling model: virtual time + user actions in, new state out.
+// No DOM, wall clock, or ambient randomness. A seed keeps each walkthrough
+// repeatable; normal page resets supply a new seed. Timings are milliseconds.
+const IdlePolicy = (() => {
+  const EVERYDAY=['original','double-blink','look-around','curious','daydream','content'];
+  const PLAYFUL=['wink','skeptical','peek','happy-bounce','startle'];
+  const CALM=['original','double-blink','look-around'];
+  const HOPS=['happy-bounce','startle'];
+  const length=s=>s.frames.reduce((sum,f)=>sum+f.ms,0);
+  function random(s) { s.seed=(Math.imul(1664525,s.seed)+1013904223)>>>0; return s.seed/4294967296; }
+  function between(s,min,max) { return min+Math.floor(random(s)*(max-min+1)); }
+  function note(s,text) { s.log=[{at:s.now,text},...s.log].slice(0,18); }
+  function rest(s) {
+    s.phase='rest'; s.sceneId=null; s.phaseAt=s.now;
+    s.dueAt=s.now+between(s,s.mood==='sleepy'?15000:6000,s.mood==='sleepy'?25000:12000);
+    note(s,`Neutral rest for ${((s.dueAt-s.now)/1000).toFixed(1)} s.`);
+  }
+  function take(s,group,ids) {
+    const eligible=ids.filter(id=>s.enabled.includes(id) && id!==s.lastId && (!HOPS.includes(id) || s.now-s.lastHop>=60000));
+    if(!eligible.length) return null;
+    let bag=s.bags[group].filter(id=>eligible.includes(id));
+    if(!bag.length) {
+      bag=[...eligible];
+      for(let i=bag.length-1;i>0;i--) { const j=Math.floor(random(s)*(i+1)); [bag[i],bag[j]]=[bag[j],bag[i]]; }
+    }
+    const id=bag.shift(); s.bags[group]=bag; return id;
+  }
+  function choose(s) {
+    let id=null, group='everyday';
+    if(s.mood==='sleepy') {
+      group='sleepy';
+      if(random(s)<0.6) id=take(s,'sleepy',['sleepy']);
+      if(!id) id=take(s,'calm',CALM);
+      if(!id) id=take(s,'sleepy',['sleepy']);
+    } else {
+      const groups=random(s)<0.8?['everyday','playful']:['playful','everyday'];
+      for(const name of groups) {
+        id=take(s,name,name==='everyday'?EVERYDAY:PLAYFUL);
+        if(id) { group=name; break; }
+      }
+    }
+    // A one-scene shortlist still plays, separated by a full neutral rest.
+    if(!id && s.lastId) {
+      const previous=s.lastId; s.lastId=null;
+      id=chooseWithoutRepeat(s); s.lastId=previous;
+      group='everyday';
+      if(s.mood==='sleepy') group='sleepy';
+      else if(PLAYFUL.includes(id)) group='playful';
+    }
+    return {id,group};
+  }
+  function chooseWithoutRepeat(s) {
+    const ids=s.mood==='sleepy'?['sleepy',...CALM]:[...EVERYDAY,...PLAYFUL];
+    return take(s,'fallback',ids);
+  }
+  function create(ids,seed=42) {
+    const s={now:0,lastInteraction:0,idleSince:0,phase:'rest',phaseAt:0,dueAt:0,sceneId:null,mood:'awake',lastHop:-60000,lastId:null,paletteIndex:0,seed:seed>>>0,enabled:[...ids],bags:{everyday:[],playful:[],sleepy:[],calm:[],fallback:[]},log:[]};
+    note(s,'Fresh start · all clocks begin here.'); rest(s); return s;
+  }
+  function phaseDeadline(s,catalog) {
+    if(['emote','success','error','settling','waking'].includes(s.phase)) return s.phaseAt+length(catalog[s.sceneId]);
+    if(s.phase==='rest' || s.phase==='typing') return s.dueAt;
+    return Infinity;
+  }
+  function moodDeadline(s) {
+    if(s.phase!=='rest' && s.phase!=='emote') return Infinity;
+    const idleStart=Math.max(s.lastInteraction,s.idleSince);
+    if(s.mood==='awake') return Math.max(s.now,idleStart+60000);
+    if(s.mood==='sleepy' && s.enabled.includes('sleep')) return Math.max(s.now,idleStart+90000);
+    return Infinity;
+  }
+  function deadline(s,catalog) { return Math.min(phaseDeadline(s,catalog),moodDeadline(s)); }
+  function advance(state,delta,catalog) {
+    if(!Number.isFinite(delta)) return state;
+    const s=structuredClone(state), target=s.now+Math.max(0,delta);
+    while(true) {
+      const moodAt=moodDeadline(s), phaseEnd=phaseDeadline(s,catalog), next=Math.min(moodAt,phaseEnd);
+      if(next>target) { s.now=target; break; }
+      s.now=next;
+      if(moodAt===next) {
+        if(s.mood==='awake') {
+          s.mood='sleepy'; note(s,'A minute of idle · getting sleepy. No more playful choices.');
+          if(s.enabled.includes('sleepy')) {
+            s.phase='emote'; s.sceneId='sleepy'; s.phaseAt=s.now; s.lastId='sleepy';
+            note(s,'Sleepy nod · the first step toward sleep.');
+          } else rest(s);
+        } else {
+          s.mood='asleep'; s.phase='settling'; s.sceneId='fall-asleep'; s.phaseAt=s.now;
+          note(s,'90 seconds idle · tucking feet away and lying down.');
+        }
+      } else if(s.phase==='settling') {
+        s.phase='sleep'; s.sceneId='sleep'; s.phaseAt=s.now;
+        note(s,'Sound asleep · only slow breathing until you return.');
+      } else if(s.phase==='waking') {
+        s.phase='typing'; s.sceneId=null; s.phaseAt=s.now;
+        s.dueAt=Math.max(s.now,s.lastInteraction+3000);
+        note(s,'Wake-up finished · neutral while you type.');
+      } else if(s.phase==='emote') rest(s);
+      else if(s.phase==='typing') {
+        note(s,'Three seconds quiet · idle emotes can return.');
+        s.phase='rest'; s.sceneId=null; s.phaseAt=s.now; s.dueAt=s.now;
+      } else if(s.phase==='success' || s.phase==='error') {
+        s.paletteIndex=(s.paletteIndex+1)%6; s.idleSince=s.now;
+        note(s,'Completion settled · next palette, fresh idle rest.'); rest(s);
+      } else if(s.phase==='rest') {
+        const {id,group}=choose(s);
+        if(!id) { note(s,'No eligible scenes checked · staying neutral.'); rest(s); continue; }
+        s.sceneId=id; s.phase='emote'; s.phaseAt=s.now; s.lastId=id;
+        if(HOPS.includes(id)) s.lastHop=s.now;
+        note(s,`${catalog[id].name} · ${group} choice.`);
+      }
+    }
+    return s;
+  }
+  function act(state,action,catalog) {
+    if(action.type==='advance') return advance(state,action.ms,catalog);
+    const s=structuredClone(state);
+    if(action.type==='enabled') {
+      s.enabled=[...action.ids];
+      if(!s.enabled.includes('sleep') && (s.phase==='sleep' || s.phase==='settling')) {
+        s.mood='sleepy'; rest(s); note(s,'Sleep unchecked · returning to the sleepy repertoire.');
+      }
+      return s;
+    }
+    if(action.type==='interact') {
+      s.lastInteraction=s.now;
+      if(s.phase==='thinking' || s.phase==='working' || s.phase==='success' || s.phase==='error') return s;
+      s.dueAt=s.now+3000;
+      // Repeated keystrokes extend the quiet window, not the animation.
+      if(s.phase==='waking') return s;
+      if(s.mood!=='awake') {
+        const laidDownAt=catalog['fall-asleep'].frames.slice(0,-1).reduce((ms,f)=>ms+f.ms,0);
+        const lyingDown=s.phase==='sleep' || (s.phase==='settling' && s.now-s.phaseAt>=laidDownAt);
+        s.sceneId=lyingDown?'wake-up':'wake-drowsy';
+        s.mood='awake'; s.phase='waking'; s.phaseAt=s.now;
+        note(s,'You’re back · one gentle wake-up, without delaying your typing.');
+        return s;
+      }
+      const wasTyping=s.phase==='typing';
+      s.phase='typing'; s.sceneId=null; s.phaseAt=s.now;
+      if(!wasTyping) note(s,'You are typing · neutral immediately, no new emotes.');
+      return s;
+    }
+    if(['thinking','working','success','error'].includes(action.type)) {
+      const busy=s.phase==='thinking' || s.phase==='working';
+      const finishing=s.phase==='success' || s.phase==='error';
+      if(action.type==='working' && !busy) { note(s,'Start a turn before starting a tool.'); return s; }
+      if((action.type==='success' || action.type==='error') && !busy) { note(s,'No active turn to finish.'); return s; }
+      if(action.type==='thinking') {
+        if(finishing) s.paletteIndex=(s.paletteIndex+1)%6;
+        s.lastInteraction=s.now;
+      }
+      s.mood='awake'; s.phase=action.type; s.sceneId=action.type; s.phaseAt=s.now;
+      note(s,`${catalog[action.type].name} · idle policy yields.`);
+    }
+    return s;
+  }
+  return {create,act,advance,deadline};
+})();
+</script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let scene = LIBRARY.find(s => s.id === params.get('emote')) || SCENES[1];
+let palette = Object.hasOwn(PALETTES, params.get('palette')) ? params.get('palette') : 'Mint';
+let resolution = params.get('size') === '12' ? 12 : 16;
+let view = ['A','B','C'].includes(params.get('variant')) ? params.get('variant') : 'C';
+let mode = params.get('mode')==='solo'?'solo':'policy';
+let playing = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+let speed = 1, elapsed = 0;
+let lastNow = performance.now();
+const chosen = new Set(SCENES.map(s=>s.id));
+let policy = IdlePolicy.create([...chosen],Math.floor(Math.random()*4294967296));
+policy.paletteIndex=Object.keys(PALETTES).indexOf(palette);
+const duration = s => s.frames.reduce((n,f) => n+f.ms,0);
+function sample(s, time) {
+  let local = Math.max(0,time) % duration(s);
+  for (let index=0; index<s.frames.length; index++) {
+    const frame = s.frames[index];
+    if (local < frame.ms) return {frame,index};
+    local -= frame.ms;
+  }
+}
+function draw(canvas, n, frame) {
+  const key = [n,palette,frame.expression,frame.pose,frame.hop].join(':');
+  if (canvas.dataset.frame === key) return;
+  canvas.dataset.frame = key;
+  canvas.style.setProperty('--pixels',n);
+  canvas.width = n; canvas.height = n;
+  const ctx = canvas.getContext('2d');
+  const shape = SHAPES[n][frame.pose];
+  const [highlight,body,shadow,eyes] = PALETTES[palette];
+  const hop = Math.min(2,frame.hop);
+  for (let y=0;y<n;y++) for (let x=0;x<n;x++) {
+    if (shape[y][x] !== '#') continue;
+    const left = x===0 || shape[y][x-1] === '.';
+    const right = x===n-1 || shape[y][x+1] === '.';
+    ctx.fillStyle = body;
+    if (y>=n-3 || (right && y>=n/2-1)) ctx.fillStyle = shadow;
+    else if ((left && y<=n-5) || (y<=(n===16?4:3) && x<n/2)) ctx.fillStyle = highlight;
+    ctx.fillRect(x,y-hop,1,1);
+  }
+  let [lx,rx,ey] = n===16 ? [5,10,9] : [3,7,6];
+  if(frame.pose==='Sleep' || frame.pose==='SleepBreath') ey=n===16?11:7;
+  ctx.fillStyle = eyes;
+  const pixel = (x,y) => { if (shape[y]?.[x]==='#') ctx.fillRect(x,y-hop,1,1); };
+  const rect = (x,y,w,h) => { for(let yy=y;yy<y+h;yy++) for(let xx=x;xx<x+w;xx++) pixel(xx,yy); };
+  const pair = (dx,dy,h=2) => { rect(lx+dx,ey+dy,2,h); rect(rx+dx,ey+dy,2,h); };
+  switch(frame.expression) {
+    case 'Idle': pair(0,0); break;
+    case 'LookLeft': pair(-1,0); break;
+    case 'LookRight': pair(1,0); break;
+    case 'Thinking': pair(0,-1); break;
+    case 'LookDown': pair(0,1); break;
+    case 'Focused': case 'Blink': case 'Sleep': pair(0,1,1); break;
+    case 'Sleepy': pair(0,0,1); break;
+    case 'Happy': for(const x of [lx,rx]) { pixel(x-1,ey+1); pixel(x,ey); pixel(x+1,ey); pixel(x+2,ey+1); } break;
+    case 'Surprised': pair(0,-1,3); break;
+    case 'Confused': rect(lx,ey,2,2); rect(rx,ey-1,2,2); break;
+    case 'Wink': rect(lx,ey,2,2); rect(rx,ey+1,2,1); break;
+    case 'Skeptical': rect(lx,ey+1,2,1); rect(rx,ey-1,2,2); break;
+  }
+}
+function updateURL() {
+  const p = new URLSearchParams({variant:view,mode,emote:scene.id,palette,size:String(resolution)});
+  history.replaceState(null,'',`${location.pathname}?${p}`);
+}
+function setView(next) {
+  view = next;
+  document.body.dataset.view = view;
+  $('view-key').textContent = view;
+  $('view-name').textContent = {A:'Pixel stage',B:'Contact sheet',C:'Terminal context'}[view];
+  // The contact sheet moves into the main grid; all views share the same state.
+  if (view==='B') document.querySelector('.workspace').append($('library'));
+  else document.querySelector('main').append($('library'));
+  updateURL();
+}
+function cycleView(delta) { const views=['A','B','C']; setView(views[(views.indexOf(view)+delta+3)%3]); }
+function updateMixButton() {
+  document.body.dataset.mode=mode;
+  $('mix').setAttribute('aria-pressed',String(mode==='policy'));
+  $('mix').textContent = mode==='policy'?'Live policy: on':'Live policy: off · single loop';
+}
+function previewScene(next) {
+  mode='solo'; updateMixButton(); selectScene(next);
+}
+function inspectPose(position) {
+  mode='solo'; updateMixButton(); pause(); elapsed=position; updateURL(); render();
+}
+function selectScene(next) {
+  scene=next; elapsed=0;
+  $('scene-title').textContent=scene.name;
+  $('scene-kind').textContent=scene.kind;
+  $('scene-intent').textContent=scene.intent;
+  $('scene-description').textContent=scene.description;
+  $('scrub').max=duration(scene)-1;
+  $('scene-data').textContent=JSON.stringify({id:scene.id,source:scene.kind.toLowerCase(),duration_ms:duration(scene),frames:scene.frames},null,2);
+  document.querySelectorAll('.card').forEach(card => {
+    const selected=card.dataset.scene===scene.id;
+    card.classList.toggle('selected',selected);
+    card.querySelector('.card-pick').setAttribute('aria-pressed',String(selected));
+  });
+  $('timeline').replaceChildren();
+  scene.frames.forEach((frame,index) => {
+    const button=document.createElement('button');
+    button.type='button'; button.className='frame';
+    button.setAttribute('aria-label',`Pose ${index+1}: ${frame.expression}, ${frame.pose}, hop ${frame.hop}, ${frame.ms} milliseconds`);
+    const canvas=document.createElement('canvas');
+    const label=document.createElement('span'); label.textContent=`${frame.ms} ms`;
+    button.append(canvas,label);
+    button.onclick=()=>inspectPose(scene.frames.slice(0,index).reduce((sum,f)=>sum+f.ms,0));
+    $('timeline').append(button);
+  });
+  updateURL(); render();
+}
+function pause() { playing=false; updatePlayButton(); }
+function updatePlayButton() {
+  $('play').textContent=playing?'Pause':'Play'; $('policy-pause').textContent=playing?'Pause':'Play';
+  $('play').setAttribute('aria-label',playing?'Pause animations':'Play animations');
+}
+function updateShortlist() {
+  $('shortlist-count').textContent=`${chosen.size} selected`;
+  policy=IdlePolicy.act(policy,{type:'enabled',ids:[...chosen]},CATALOG);
+}
+function setResolution() {
+  $('resolution').value=String(resolution);
+  $('hero-label').textContent=`${resolution} × ${resolution} · primary`;
+  $('companion-label').textContent=`${resolution===16?12:16} × ${resolution===16?12:16} · compare`;
+  // Ground the source's last occupied row at the preview baseline, as graphics.rs does.
+  const bot=$('terminal-bot');
+  bot.style.width=resolution===16?'72px':'96px';
+  bot.style.height=resolution===16?'48px':'96px';
+  bot.style.bottom=resolution===16?'7px':'0px';
+  document.querySelector('.input-panel').style.minHeight=resolution===16?'54px':'112px';
+  $('terminal-note').textContent=resolution===16
+    ? 'Approximate 6-column × 3-row image footprint at 12 × 16 px per cell. Browser pixels are not a terminal protocol preview. Use this view to judge attention and pacing.'
+    : 'Approximate 12-column × 6-row tiled footprint at 8 × 16 px per cell. This shows the 12 × 12 color grid, not actual half-block font glyphs.';
+  updateURL(); render();
+}
+const terminalSource=document.createElement('canvas');
+function drawTerminal(frame) {
+  draw(terminalSource,resolution,frame);
+  const canvas=$('terminal-bot');
+  if(canvas.dataset.frame===terminalSource.dataset.frame) return;
+  canvas.dataset.frame=terminalSource.dataset.frame;
+  canvas.width=resolution===16?72:96;
+  canvas.height=resolution===16?48:96;
+  const ctx=canvas.getContext('2d'); ctx.imageSmoothingEnabled=false;
+  if(resolution===16) ctx.drawImage(terminalSource,12,3,48,48);
+  else ctx.drawImage(terminalSource,0,0,96,96);
+}
+function render() {
+  let time=elapsed, neutral=false;
+  if(mode==='policy') {
+    time=policy.now-policy.phaseAt;
+    neutral=!policy.sceneId;
+  }
+  const {frame,index}=neutral ? {frame:idle(0),index:-1} : sample(scene,time);
+  draw($('hero'),resolution,frame);
+  draw($('companion'),resolution===16?12:16,frame);
+  drawTerminal(frame);
+  $('clock').textContent=`${(time/1000).toFixed(2)} / ${(duration(scene)/1000).toFixed(2)} s`;
+  if(neutral) $('clock').textContent='Neutral · waiting for the next moment';
+  if(mode==='policy' && policy.phase==='sleep') $('clock').textContent='Asleep · one slow breath every 6 seconds';
+  $('scrub').value=neutral?0:time%duration(scene);
+  $('playback-mode').textContent=mode==='policy'?'Live scheduling policy':'Single scene loop';
+  $('rest-state').textContent=playing?'Playing':'Paused';
+  $('scene-title').textContent=neutral?'A little breathing room':scene.name;
+  $('scene-kind').textContent=neutral?'NEUTRAL':scene.kind;
+  $('scene-intent').textContent=neutral?'Quiet company':scene.intent;
+  $('scene-description').textContent=neutral?'No emote is playing. Robbie is leaving space for you; watch the policy countdown above.':scene.description;
+  $('terminal-activity').textContent='robbie — idle / no active turn';
+  if(mode==='policy' && ['thinking','working','success','error','sleep','settling','waking'].includes(policy.phase)) $('terminal-activity').textContent=`robbie — ${policy.phase}`;
+  renderPolicy();
+  $('state-expression').textContent=frame.expression;
+  $('state-pose').textContent=frame.pose;
+  $('state-hop').textContent=`${frame.hop} px`;
+  $('state-moment').textContent=index<0?'Neutral':`${index+1} / ${scene.frames.length}`;
+  [...$('timeline').children].forEach((button,i)=>{
+    draw(button.querySelector('canvas'),resolution,scene.frames[i]);
+    button.setAttribute('aria-pressed',String(i===index));
+  });
+  for(const s of LIBRARY) {
+    // In the stage/context views only the selected card moves. Contact sheet
+    // plays every candidate in parallel; pausing freezes them for comparison.
+    let cardFrame=s.frames[s.preview];
+    if(view==='B' && mode==='solo') cardFrame=sample(s,sheetElapsed).frame;
+    else if(s===scene) cardFrame=frame;
+    const card=document.querySelector(`[data-scene="${s.id}"]`);
+    const selected=mode==='policy'?policy.sceneId===s.id:scene===s;
+    card.classList.toggle('selected',selected);
+    card.querySelector('.card-pick').setAttribute('aria-pressed',String(selected));
+    draw(card.querySelector('canvas'),resolution,cardFrame);
+  }
+}
+let sheetElapsed=0, lastPaint=0;
+function tick(now) {
+  const delta=Math.min(now-lastNow,200)*speed; lastNow=now;
+  if(playing) {
+    sheetElapsed+=delta;
+    if(mode==='policy') {
+      policy=IdlePolicy.advance(policy,delta,CATALOG); syncPolicy();
+    } else elapsed=(elapsed+delta)%duration(scene);
+  }
+  if(now-lastPaint>=50) { render(); lastPaint=now; }
+  requestAnimationFrame(tick);
+}
+function seconds(ms) { return `${Math.max(0,ms/1000).toFixed(1)} s`; }
+function stamp(ms) { const total=Math.floor(ms/1000); return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`; }
+let logKey='';
+function renderPolicy() {
+  $('policy-away').textContent=seconds(policy.now-policy.lastInteraction);
+  $('policy-hop').textContent=policy.now-policy.lastHop>=60000?'Available':seconds(60000-(policy.now-policy.lastHop));
+  const labels={rest:'Neutral rest',typing:'You’re typing',emote:'Idle emote',thinking:'Thinking',working:'Tool working',success:'Success scene',error:'Error scene',settling:'Tucking in',sleep:'Sound asleep',waking:'Gently waking up'};
+  $('policy-status').textContent=`${playing?'Live':'Paused'} · ${stamp(policy.now)} · ${labels[policy.phase]}`;
+  $('policy-mood').textContent={awake:'Everyday / playful',sleepy:'Sleepy · feet still out',asleep:'Asleep · feet tucked in'}[policy.mood];
+  if(['thinking','working','success','error'].includes(policy.phase)) $('policy-mood').textContent='Activity has priority';
+  if(policy.phase==='typing') $('policy-mood').textContent='Attentive · neutral';
+  if(policy.phase==='waking') $('policy-mood').textContent='Waking · one gentle stretch';
+  let nextLabel='Next emote';
+  if(policy.phase==='typing') nextLabel='Quiet in';
+  else if(policy.phase==='emote') nextLabel='Rest in';
+  else if(policy.phase==='success' || policy.phase==='error') nextLabel='Idle in';
+  const due=IdlePolicy.deadline(policy,CATALOG);
+  const idleStart=Math.max(policy.lastInteraction,policy.idleSince);
+  if(policy.mood==='awake' && due===idleStart+60000) nextLabel='Sleepy in';
+  if(policy.mood==='sleepy' && due===idleStart+90000) nextLabel='Tuck in after';
+  if(policy.phase==='settling') nextLabel='Asleep in';
+  if(policy.phase==='waking') nextLabel='Neutral in';
+  $('policy-next').textContent=Number.isFinite(due)?`${nextLabel} ${seconds(due-policy.now)}`:'Waiting for finish';
+  if(policy.phase==='sleep') $('policy-next').textContent='Until you return';
+  const key=JSON.stringify(policy.log);
+  if(key!==logKey) {
+    logKey=key; $('policy-log').replaceChildren();
+    for(const event of policy.log) {
+      const li=document.createElement('li'), time=document.createElement('time');
+      time.textContent=stamp(event.at); li.append(time,document.createTextNode(event.text)); $('policy-log').append(li);
+    }
+  }
+}
+function syncPolicy() {
+  const nextPalette=Object.keys(PALETTES)[policy.paletteIndex];
+  if(palette!==nextPalette) {palette=nextPalette;updatePalette();updateURL();}
+  if(policy.sceneId && policy.sceneId!==scene.id) selectScene(CATALOG[policy.sceneId]);
+}
+function dispatch(action) {
+  mode='policy'; updateMixButton();
+  policy=IdlePolicy.act(policy,action,CATALOG); syncPolicy(); updateURL(); render();
+}
+function freshPolicy(seed=Math.floor(Math.random()*4294967296)) {
+  mode='policy'; policy=IdlePolicy.create([...chosen],seed);
+  policy.paletteIndex=Object.keys(PALETTES).indexOf(palette);
+  $('draft').value=''; lastNow=performance.now();
+  document.querySelectorAll('#scenario-tabs button').forEach(b=>b.setAttribute('aria-pressed','false'));
+  $('walk-steps').replaceChildren();
+  $('walk-description').textContent='Choose a scenario to reset to a repeatable, paused starting point, then click through each step.';
+  updateMixButton(); syncPolicy(); updateURL(); render();
+}
+$('interact').onclick=()=>dispatch({type:'interact'});
+$('away').onclick=()=>dispatch({type:'advance',ms:60000});
+$('sleep-now').onclick=()=>dispatch({type:'advance',ms:Math.max(0,Math.max(policy.lastInteraction,policy.idleSince)+90000-policy.now)+duration(FALL_ASLEEP)});
+$('skip').onclick=()=>dispatch({type:'advance',ms:10000});
+$('policy-reset').onclick=()=>freshPolicy();
+for(const type of ['working','success','error']) $(type).onclick=()=>dispatch({type});
+$('submit').onclick=()=>{ $('draft').value=''; dispatch({type:'thinking'}); };
+$('draft').oninput=()=>dispatch({type:'interact'});
+$('draft').onkeydown=event=>{
+  if(event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+  if(event.key==='Enter' && !event.shiftKey) {event.preventDefault();$('submit').click();return;}
+  // Navigation and deletion count too, including an empty backspace.
+  dispatch({type:'interact'});
+};
+const WALKS=[
+  {name:'Everyday rhythm',description:'Follow one emote into its neutral rest. These steps pause time so you can inspect the exact boundaries.',steps:[
+    ['Wait for an emote',()=>dispatch({type:'advance',ms:Math.max(0,policy.dueAt-policy.now)+1000})],
+    ['Let it finish',()=>dispatch({type:'advance',ms:IdlePolicy.deadline(policy,CATALOG)-policy.now})],
+    ['Wait for the next',()=>dispatch({type:'advance',ms:policy.dueAt-policy.now+1000})]
+  ]},
+  {name:'Typing interruption',description:'Interrupt an emote, then check that nothing moves until the full three-second quiet window has passed.',steps:[
+    ['Start an emote',()=>dispatch({type:'advance',ms:policy.dueAt-policy.now+1000})],
+    ['Type a character',()=>dispatch({type:'interact'})],
+    ['Wait 2.9 seconds',()=>dispatch({type:'advance',ms:2900})],
+    ['Wait the last 0.1 s',()=>dispatch({type:'advance',ms:100})]
+  ]},
+  {name:'Sleep → gently wake',description:'After a minute, Robbie nods off. At 90 seconds it lies down. On return it stirs, stands up, and blinks back to idle. Continued typing never restarts the wake-up.',steps:[
+    ['Leave for a minute',()=>dispatch({type:'advance',ms:60000})],
+    ['Watch the sleepy nod',()=>dispatch({type:'advance',ms:1500})],
+    ['Wait until 90 seconds',()=>dispatch({type:'advance',ms:90000-policy.now})],
+    ['Settle into sleep',()=>dispatch({type:'advance',ms:duration(FALL_ASLEEP)})],
+    ['Come back and type',()=>dispatch({type:'interact'})],
+    ['Watch it stir',()=>dispatch({type:'advance',ms:200})],
+    ['Keep typing',()=>dispatch({type:'interact'})],
+    ['Finish waking',()=>dispatch({type:'advance',ms:IdlePolicy.deadline(policy,CATALOG)-policy.now})]
+  ]},
+  {name:'A complete turn',description:'Idle yields to real activity. Completion stays in the old color; only its settled ending advances the palette and starts a fresh idle rest.',steps:[
+    ['Submit a prompt',()=>dispatch({type:'thinking'})],
+    ['Run a tool',()=>dispatch({type:'working'})],
+    ['Finish successfully',()=>dispatch({type:'success'})],
+    ['Inspect the happy hop',()=>dispatch({type:'advance',ms:350})],
+    ['Let completion settle',()=>dispatch({type:'advance',ms:IdlePolicy.deadline(policy,CATALOG)-policy.now})]
+  ]}
+];
+function startWalk(walk) {
+  pause(); freshPolicy(42); setView('C'); $('walkthrough').open=true;
+  document.querySelectorAll('#scenario-tabs button').forEach(b=>b.setAttribute('aria-pressed',String(b.textContent===walk.name)));
+  $('walk-description').textContent=walk.description;
+  $('walk-steps').replaceChildren();
+  walk.steps.forEach(([name,action],index)=>{
+    const button=document.createElement('button');button.type='button';button.textContent=`${index+1}. ${name}`;button.disabled=index!==0;
+    button.onclick=()=>{
+      action(); button.disabled=true;
+      const next=$('walk-steps').children[index+1]; if(next) next.disabled=false;
+    };
+    $('walk-steps').append(button);
+  });
+}
+for(const walk of WALKS) {
+  const button=document.createElement('button');button.type='button';button.textContent=walk.name;button.setAttribute('aria-pressed','false');
+  button.onclick=()=>startWalk(walk);$('scenario-tabs').append(button);
+}
+$('walk-description').textContent='Optional guided scenarios: choose one to reset to a repeatable, paused starting point, then click through each step.';
+for(const [name,colors] of Object.entries(PALETTES)) {
+  const button=document.createElement('button');
+  button.type='button'; button.className='swatch'; button.style.setProperty('--swatch',colors[1]);
+  button.title=name; button.setAttribute('aria-label',`${name} palette`);
+  button.dataset.palette=name;
+  button.onclick=()=>{ palette=name; policy.paletteIndex=Object.keys(PALETTES).indexOf(name); updatePalette(); updateURL(); render(); };
+  $('palettes').append(button);
+}
+function updatePalette() {
+  $('palette-name').textContent=palette;
+  document.documentElement.style.setProperty('--accent',PALETTES[palette][1]);
+  document.querySelectorAll('.swatch').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.palette===palette)));
+}
+for(const s of LIBRARY) {
+  const card=document.createElement('article'); card.className='card'; card.dataset.scene=s.id;
+  const button=document.createElement('button'); button.type='button'; button.className='card-pick';
+  const canvas=document.createElement('canvas'); canvas.setAttribute('aria-hidden','true');
+  const name=document.createElement('strong'); name.textContent=s.name;
+  const meta=document.createElement('small'); meta.textContent=`${s.energy} · ${(duration(s)/1000).toFixed(2)} s`;
+  button.append(canvas,name,meta); button.onclick=()=>previewScene(s);
+  const foot=document.createElement('div'); foot.className='card-foot';
+  const label=document.createElement('label');
+  if(s.kind==='TRANSITION') label.textContent='Triggered by your return';
+  else {
+    const check=document.createElement('input'); check.type='checkbox'; check.checked=chosen.has(s.id);
+    check.setAttribute('aria-label',`Include ${s.name} in live policy and export`);
+    check.onchange=()=>{ if(check.checked) chosen.add(s.id); else chosen.delete(s.id); updateShortlist(); };
+    label.append(check,document.createTextNode('Include'));
+  }
+  const tag=document.createElement('span'); tag.className='tag'; tag.textContent=s.kind==='REFERENCE'?'EXISTING':'NEW';
+  foot.append(label,tag); card.append(button,foot); $('cards').append(card);
+}
+$('play').onclick=()=>{playing=!playing; lastNow=performance.now(); updatePlayButton(); render();};
+$('policy-pause').onclick=()=>$('play').click();
+$('restart').onclick=()=>{if(mode==='policy') freshPolicy(); else {elapsed=0;sheetElapsed=0;render();}};
+$('step').onclick=()=>{pause(); if(mode==='policy') dispatch({type:'advance',ms:50}); else {elapsed=(elapsed+50)%duration(scene);sheetElapsed+=50;render();}};
+$('scrub').oninput=()=>inspectPose(Number($('scrub').value));
+$('speed').oninput=()=>{speed=Number($('speed').value); $('speed-label').textContent=`${speed}×`;};
+$('resolution').onchange=()=>{resolution=Number($('resolution').value); setResolution();};
+$('mix').onclick=()=>{
+  mode=mode==='policy'?'solo':'policy';
+  if(mode==='policy') syncPolicy();
+  updateMixButton(); updateURL(); render();
+};
+$('export').onclick=()=>{
+  const payload={prototype:true,note:'Candidates only; not a production config. New expression patterns are defined in the HTML draw() function.',palette,colors:PALETTES[palette],primary_size:resolution,tick_ms:50,policy:{everyday_probability:0.8,rest_ms:[6000,12000],typing_quiet_ms:3000,sleepy_after_ms:60000,sleep_after_ms:90000,sleepy_rest_ms:[15000,25000],hop_cooldown_ms:60000},geometry:SHAPES,sleep_transition:FALL_ASLEEP,wake_transition:WAKE_UP,drowsy_wake_transition:WAKE_DROWSY,scenes:SCENES.filter(s=>chosen.has(s.id)).map(({id,name,kind,frames})=>({id,name,kind,frames}))};
+  const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
+  const link=document.createElement('a'); link.href=url; link.download='robbie-idle-shortlist.prototype.json'; link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+$('view-prev').onclick=()=>cycleView(-1);
+$('view-next').onclick=()=>cycleView(1);
+document.addEventListener('keydown',event=>{
+  if(event.target.closest('input,select,textarea,button,[contenteditable]')) return;
+  if(event.key==='ArrowLeft' || event.key==='ArrowRight') { event.preventDefault(); cycleView(event.key==='ArrowLeft'?-1:1); }
+  if(event.code==='Space') { event.preventDefault(); $('play').click(); }
+});
+document.addEventListener('visibilitychange',()=>{lastNow=performance.now();});
+updatePalette(); updateShortlist(); updatePlayButton(); selectScene(scene); setResolution(); setView(view); updateMixButton(); syncPolicy(); render();
+if(params.get('preview')==='sleep') $('sleep-now').click();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
