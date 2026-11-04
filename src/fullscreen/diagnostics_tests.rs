@@ -398,23 +398,89 @@ async fn child_text_joins_the_root_ui_turn_without_losing_its_own_request_identi
 
 #[tokio::test]
 async fn frontend_acknowledges_agent_failure_without_inventing_an_empty_success() {
+    for transcript in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Recorder::for_test(root.path(), transcript);
+        let server = Server::new(vec![Reply::Http(403, "", "private forbidden body")]);
+        let mut fixture = Fixture::new(&server, &recorder);
+        let result = fixture.run().await;
+        fixture.consume(false);
+        assert!(fixture.finish(result).is_none());
+        let screen = fixture.screen();
+        assert!(screen.contains("[error]"));
+        assert!(!screen.contains("private forbidden body"));
+        let records = log(root.path());
+        let end = one(&records, "ui_turn_finished");
+        assert_eq!(end["outcome"], "agent_failed");
+        assert!(end.get("returned_text_bytes").is_none());
+        assert_eq!(
+            serde_json::to_string(&records)
+                .unwrap()
+                .contains("private forbidden body"),
+            transcript
+        );
+    }
+}
+
+#[tokio::test]
+async fn exhausted_rate_limit_retries_allow_the_next_user_message_to_complete() {
     let root = tempfile::tempdir().unwrap();
-    let recorder = Recorder::for_test(root.path(), true);
-    let server = Server::new(vec![Reply::Http(403, "", "private forbidden body")]);
+    let recorder = Recorder::for_test(root.path(), false);
+    let server = Server::new(vec![
+        Reply::Http(429, "", "rate limited"),
+        Reply::Http(429, "", "rate limited"),
+        Reply::Http(429, "", "rate limited"),
+        Reply::Http(429, "", "rate limited"),
+        Reply::Http(200, "", TEXT),
+    ]);
     let mut fixture = Fixture::new(&server, &recorder);
-    let result = fixture.run().await;
+    // A draft typed during the failed turn must survive completion as well.
+    fixture.app.handle_event(Event::Paste("next prompt".into()));
+    let turn = fixture.turn.take().unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        fixture.agent.run_in_turn(PROMPT, turn),
+    )
+    .await
+    .expect("bounded retries timed out");
+    assert!(format!("{:#}", result.as_ref().unwrap_err()).contains("429"));
     fixture.consume(false);
     assert!(fixture.finish(result).is_none());
     assert!(fixture.screen().contains("[error]"));
-    let records = log(root.path());
-    let end = one(&records, "ui_turn_finished");
-    assert_eq!(end["outcome"], "agent_failed");
-    assert!(end.get("returned_text_bytes").is_none());
-    assert!(
-        !serde_json::to_string(&records)
-            .unwrap()
-            .contains("private forbidden body")
+    assert_eq!(server.count(), 4);
+
+    assert_eq!(
+        fixture
+            .app
+            .handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ))),
+        InputAction::Submit,
+        "retry exhaustion must not lock the input for the rest of the session"
     );
+    let prompt = fixture.app.content.submit();
+    assert_eq!(prompt, "next prompt");
+    let turn = fixture.agent.model.agent_turn("main", None);
+    fixture.app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.agent.run_in_turn(&prompt, turn),
+    )
+    .await
+    .expect("next turn timed out");
+    fixture.consume(false);
+    assert!(fixture.finish(result).is_some());
+    assert!(fixture.screen().contains("é猫"));
+    assert_eq!(server.count(), 5);
+
+    let records = log(root.path());
+    let endings = events(&records, "ui_turn_finished");
+    assert_eq!(endings.len(), 2);
+    assert_eq!(endings[0]["outcome"], "agent_failed");
+    assert_eq!(endings[1]["outcome"], "completed");
+    assert_ne!(endings[0]["turn_id"], endings[1]["turn_id"]);
+    assert_eq!(events(&records, "retry_scheduled").len(), 3);
 }
 
 #[tokio::test]

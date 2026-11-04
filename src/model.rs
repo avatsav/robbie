@@ -14,17 +14,21 @@ use crate::diagnostics::{
     Recorder,
     agent::AgentTurn,
     model::{
-        AttemptOutcome, ModelRequest, RequestOrigin, RequestOutcome, RetryStop, TransportFailure,
+        AttemptOutcome, ModelRequest, RequestOrigin, RequestOutcome, RetrySource, RetryStop,
+        TransportFailure,
     },
     tool::ToolContext,
 };
 
 mod conversation;
+mod http_error;
 mod metadata;
 mod protocol;
 mod provider;
 
 pub use conversation::{Message, Output, Reply, ToolCall, ToolResult};
+pub use http_error::HttpErrorMetadata;
+use http_error::{HttpError, RetryAfter};
 pub use metadata::ResponseMetadata;
 pub use protocol::{AnthropicMessages, Protocol};
 pub use provider::{OpenRouter, Provider};
@@ -172,19 +176,29 @@ impl Default for Policy {
 }
 
 impl Policy {
+    #[cfg(test)]
     fn delay(self, retry: usize, retry_after: Option<&str>) -> Result<Duration> {
+        let retry_after = retry_after
+            .map(|value| RetryAfter::parse(value, SystemTime::now()))
+            .unwrap_or(RetryAfter::Missing);
+        self.delay_for(retry, retry_after).map(|(delay, _)| delay)
+    }
+
+    fn delay_for(self, retry: usize, retry_after: RetryAfter) -> Result<(Duration, RetrySource)> {
         let backoff = self.backoff * (1 << retry);
-        let requested = retry_after
-            .map(|value| retry_after_delay(value, SystemTime::now()))
-            .transpose()?
-            .flatten()
-            .unwrap_or_default();
+        let requested = retry_after.delay()?;
         let delay = backoff.max(requested);
         // Never shorten a server-requested wait and hammer it early.
         if delay > MAX_RETRY_WAIT {
             bail!("Retry-After exceeds the 30-second automatic wait limit");
         }
-        Ok(delay)
+        // A tie is recorded as backoff: the header did not extend the wait.
+        let source = if requested > backoff {
+            RetrySource::RetryAfter
+        } else {
+            RetrySource::Backoff
+        };
+        Ok((delay, source))
     }
 }
 
@@ -252,20 +266,20 @@ async fn exchange(request: RequestBuilder, policy: Policy, trace: &ModelRequest)
             let status = response.status();
             observation.status(status.as_u16());
             if !status.is_success() {
-                let retry_after = response
-                    .headers()
-                    .get(RETRY_AFTER)
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_owned);
-                // Status classification must not depend on an error body's
-                // format: gateways commonly return HTML rather than JSON.
-                return Ok(Err((status, retry_after)));
+                // Parse at header receipt, before the diagnostic read. HTTP-date
+                // waits must not get shortened by time spent reading the body.
+                let retry_after =
+                    RetryAfter::from_header(response.headers().get(RETRY_AFTER), SystemTime::now());
+                // Body capture is best-effort evidence. A failed read must never
+                // reclassify a known HTTP status as a transport failure.
+                let error = HttpError::read(response, retry_after).await;
+                return Ok(Err((status, retry_after, error)));
             }
             response.bytes().await.map(Ok)
         }
         .await;
 
-        let delay = match outcome {
+        let (delay, delay_source) = match outcome {
             Ok(Ok(bytes)) => {
                 // A fully received but invalid response is not a transport
                 // failure. Do not retry JSON errors or execute partial output.
@@ -281,8 +295,8 @@ async fn exchange(request: RequestBuilder, policy: Policy, trace: &ModelRequest)
                 return parsed
                     .with_context(|| format!("invalid model response after {attempt} attempt(s)"));
             }
-            Ok(Err((status, retry_after))) => {
-                observation.finish(AttemptOutcome::HttpError, None);
+            Ok(Err((status, retry_after, error))) => {
+                observation.finish_http_error(error.metadata, &error.body);
                 let message = format!("model API returned {status} after {attempt} attempt(s)");
                 if !retryable_status(status) || retry == MAX_RETRIES {
                     trace.retry_stopped(
@@ -295,7 +309,7 @@ async fn exchange(request: RequestBuilder, policy: Policy, trace: &ModelRequest)
                     );
                     bail!(message);
                 }
-                match policy.delay(retry, retry_after.as_deref()) {
+                match policy.delay_for(retry, retry_after) {
                     Ok(delay) => delay,
                     Err(error) => {
                         trace.retry_stopped(attempt, RetryStop::DelayLimit);
@@ -326,10 +340,10 @@ async fn exchange(request: RequestBuilder, policy: Policy, trace: &ModelRequest)
                         format!("model request failed after {attempt} attempt(s)")
                     });
                 }
-                policy.delay(retry, None)?
+                policy.delay_for(retry, RetryAfter::Missing)?
             }
         };
-        trace.retry(attempt, delay);
+        trace.retry(attempt, delay, delay_source);
         // Dropping this future cancels the wait/request; no detached retry task.
         tokio::time::sleep(delay).await;
     }
@@ -354,6 +368,9 @@ pub(crate) mod tests {
 
     pub(crate) enum Reply {
         Http(u16, &'static str, &'static str),
+        HttpBytes(u16, &'static [u8]),
+        TruncatedHttpBody(u16),
+        StallHttpBody(u16),
         Disconnect,
         TruncatedBody,
         Stall,
@@ -430,6 +447,25 @@ pub(crate) mod tests {
                                 body.len()
                             );
                             let _ = socket.write_all(response.as_bytes());
+                        }
+                        Reply::HttpBytes(status, body) => {
+                            let headers = format!(
+                                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = socket.write_all(headers.as_bytes());
+                            let _ = socket.write_all(body);
+                        }
+                        Reply::TruncatedHttpBody(status) | Reply::StallHttpBody(status) => {
+                            let response = format!(
+                                "HTTP/1.1 {status} Test\r\nContent-Length: 100\r\n\r\nPRIVATE_PREFIX"
+                            );
+                            let _ = socket.write_all(response.as_bytes());
+                            if matches!(reply, Reply::StallHttpBody(_)) {
+                                while !worker_stop.load(Ordering::SeqCst) {
+                                    thread::sleep(Duration::from_millis(1));
+                                }
+                            }
                         }
                         Reply::Disconnect => {}
                         Reply::TruncatedBody => {

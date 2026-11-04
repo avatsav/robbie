@@ -29,8 +29,8 @@ only allowlisted metadata:
 | `session_started` | Capture mode and requested model |
 | `agent_turn_started` | Turn ID and source (`main`/`subagent`); one agent run, with an optional parent tool context |
 | `request_started` | Logical request ID, turn ID for agent calls, source, model |
-| `attempt_started` / `attempt_finished` | Attempt number, elapsed milliseconds, HTTP status when known, typed outcome/error category |
-| `retry_scheduled` / `retry_stopped` | Delay or reason recovery stopped; the preceding attempt records the HTTP/transport cause |
+| `attempt_started` / `attempt_finished` | Attempt number, elapsed milliseconds, HTTP status when known, typed outcome; non-2xx error details under `http_error` |
+| `retry_scheduled` / `retry_stopped` | Delay and `delay_source` (`backoff`/`retry_after`), or reason recovery stopped; the preceding attempt records the HTTP/transport cause |
 | `model_response` | Optional response ID/model, stop reason, token/cache usage, block counts, text bytes |
 | `request_finished` | Elapsed milliseconds and success, exchange failure, protocol validation failure, or cancellation |
 | `tool_execution_started` | Session-local execution ID, originating turn/request/source, bounded tool classification |
@@ -45,7 +45,22 @@ only allowlisted metadata:
 
 Every record has a schema version, session ID, ordered sequence, and Unix timestamp
 in milliseconds. Attempts are identified by `(session_id, request_id, attempt)`;
-a retry keeps the logical request ID. Agent-driven model events also carry their
+a retry keeps the logical request ID. Non-2xx `attempt_finished` records add
+`http_error` with a recognized structured `code`/`error_type` when available,
+`category`, `body_state`, `captured_bytes`, and parsed `retry_after`. The latter
+reports `missing`, `invalid`, `too_large`, or `delay` with `delay_ms`; raw header
+values are never recorded. `retry_scheduled.delay_source` is `retry_after` only
+when the header extends the exponential backoff (ties count as `backoff`). A parsed
+wait is recorded even on the final attempt or when it exceeds the automatic wait
+limit and no retry is scheduled.
+
+Error categories come only from allowlisted structured fields in a complete JSON
+error document, never keyword matching on a message. They describe what the provider
+reported, not an independently verified cause. A generic 429 does not establish
+quota exhaustion or upstream capacity trouble. Unknown labels, HTML, malformed JSON,
+and incomplete bodies retain `category=unknown`; the HTTP status is still recorded.
+
+Agent-driven model events also carry their
 `turn_id`; a turn can contain several requests. Child `Agent::run` calls get separate
 turn IDs. A delegated child's turn start/end also carries a `parent` object with the
 parent source, turn ID, request ID and tool execution ID. Join it to the delegating
@@ -125,6 +140,10 @@ Set `ROBBIE_TRANSCRIPT=1` **before starting Robbie** to opt into sensitive conte
 capture; other values do not opt in. This adds a startup `session_context` record
 (system prompt/tool declarations), the final provider-prepared JSON request body on
 `request_started`, and fully received 2xx response bodies on `attempt_finished`.
+For non-2xx responses, `attempt_finished` instead adds
+`content.kind=http_error_response` with the bounded error-body prefix. Provider
+messages and nested upstream details live only in this opted-in body, not default
+metadata or the frontend's error message.
 It also adds `content.kind=tool_call` (native ID, raw name and arguments) on tool start,
 and `content.kind=tool_result` (the returned output) on normal/error tool finish.
 These are captured at execution boundaries even if no follow-up request is sent.
@@ -136,9 +155,22 @@ and unknown protocol fields. UTF-8 response bodies are JSON strings; invalid UTF
 is preserved as an array of byte values. Malformed JSON can therefore be inspected
 when opted in, even though it is never executed.
 
-This is not a packet trace: authentication/other headers, URLs, and environment dumps
-are excluded. Non-2xx error bodies remain unread, and partial bodies lost to transport
-failure are unavailable. Recording does not change error-body handling or retry policy.
+This is not a packet trace: authentication/raw headers, request URLs, and environment
+dumps are excluded. Error-body reading retains at most **16 KiB** and has a **one-second
+budget**, also bounded by the original attempt timeout. `http_error.body_state` is
+`complete`, `truncated` (size cap), `read_failed`, or `timed_out`;
+`captured_bytes` counts bytes buffered for inspection, not necessarily persisted.
+Only opt-in transcripts retain the prefix, including any bytes obtained before a
+read failure/timeout. Invalid UTF-8 prefixes use byte arrays as with 2xx bodies.
+Treat the prefix as sensitive and check its state before assuming it is complete.
+
+Error-body inspection is best effort and cannot change status-based retryability,
+the attempt budget, or execute anything from the response. It can add up to one
+second per HTTP error before the existing backoff. `Retry-After` is parsed at header
+receipt and rounded up to milliseconds, so inspection never shortens the requested
+wait. Partial **2xx** bodies lost to transport failure remain unavailable. Dropping
+work during error-body reading still cancels the request/attempt guards; it does not
+persist an unfinished prefix or schedule a detached retry.
 
 Records are appended and immediately readable while the file is open. This is not an
 `fsync`/power-loss durability guarantee; a failed write can leave a partial last line.
@@ -181,8 +213,12 @@ and request IDs in `ui_text_*`, with `ui_turn` pointing to the parent UI span. C
 `root` and `other_turns` totals in the single `ui_turn_finished` record. Saved text
 and completed execution alone do not prove frontend receipt.
 
-An explicitly opted-in second session adds the context/request/response payloads.
-Review them locally and do not share them without checking for sensitive content.
+An explicitly opted-in second session (`ROBBIE_TRANSCRIPT=1 cargo run --locked`)
+adds the context/request/response payloads. If an HTTP error occurs, inspect the
+failed attempt's `http_error` and `content.body` for the provider's actual explanation;
+check `body_state` for truncation or an incomplete read. This does not recover error
+bodies from older sessions. Review transcripts locally and do not share them without
+checking for sensitive content.
 Exit with Ctrl+C; files remain until manually deleted.
 
 ## Prototypes

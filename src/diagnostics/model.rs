@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Content, Recorder};
-use crate::model::ResponseMetadata;
+use crate::model::{HttpErrorMetadata, ResponseMetadata};
 
 // Bare sources support standalone model exchanges. Agent calls always carry
 // their turn ID explicitly; shared clients never store a mutable "current turn".
@@ -62,12 +62,15 @@ enum Event<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<u16>,
         outcome: AttemptOutcome,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        http_error: Option<&'a HttpErrorMetadata>,
     },
     RetryScheduled {
         #[serde(flatten)]
         request: &'a RequestContext,
         attempt: usize,
         delay_ms: u128,
+        delay_source: RetrySource,
     },
     RetryStopped {
         #[serde(flatten)]
@@ -116,6 +119,13 @@ pub enum TransportFailure {
     Request,
     Body,
     Other,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrySource {
+    Backoff,
+    RetryAfter,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -191,11 +201,12 @@ impl ModelRequest {
             number,
             started: Instant::now(),
             status: None,
+            http_error: None,
             finished: false,
         }
     }
 
-    pub fn retry(&self, attempt: usize, delay: Duration) {
+    pub fn retry(&self, attempt: usize, delay: Duration, delay_source: RetrySource) {
         // The preceding attempt records the HTTP/transport cause. This event is
         // the distinct decision to retry, not evidence a later attempt started.
         self.recorder.record(
@@ -203,6 +214,7 @@ impl ModelRequest {
                 request: &self.context,
                 attempt,
                 delay_ms: delay.as_millis(),
+                delay_source,
             },
             || None,
         );
@@ -256,6 +268,7 @@ pub struct Attempt<'a> {
     number: usize,
     started: Instant,
     status: Option<u16>,
+    http_error: Option<HttpErrorMetadata>,
     finished: bool,
 }
 
@@ -266,6 +279,11 @@ impl Attempt<'_> {
 
     pub fn finish(mut self, outcome: AttemptOutcome, body: Option<&[u8]>) {
         self.end(outcome, body);
+    }
+
+    pub fn finish_http_error(mut self, metadata: HttpErrorMetadata, body: &[u8]) {
+        self.http_error = Some(metadata);
+        self.end(AttemptOutcome::HttpError, Some(body));
     }
 
     fn end(&mut self, outcome: AttemptOutcome, body: Option<&[u8]>) {
@@ -280,13 +298,19 @@ impl Attempt<'_> {
                 elapsed_ms: self.started.elapsed().as_millis(),
                 status: self.status,
                 outcome,
+                http_error: self.http_error.as_ref(),
             },
             || {
-                body.map(|bytes| Content::ProtocolResponse {
-                    body: match std::str::from_utf8(bytes) {
+                body.map(|bytes| {
+                    let body = match std::str::from_utf8(bytes) {
                         Ok(text) => Body::Text(text),
                         Err(_) => Body::Bytes(bytes),
-                    },
+                    };
+                    if self.http_error.is_some() {
+                        Content::HttpErrorResponse { body }
+                    } else {
+                        Content::ProtocolResponse { body }
+                    }
                 })
             },
         );

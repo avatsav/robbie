@@ -999,12 +999,12 @@ mod tests {
             InputAction::Submit
         );
         assert_eq!(app.content.submit(), "hello 猫");
-        app.content
-            .finish_turn(Err(anyhow::anyhow!("model failed")));
+        app.finish_turn(Err(anyhow::anyhow!("model failed")));
         app.handle_event(Event::Paste("another prompt".into()));
         assert_eq!(
             app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)),
-            InputAction::None
+            InputAction::Submit,
+            "a failed model request must not prevent submitting the next prompt"
         );
         assert_eq!(
             app.handle_event(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),

@@ -138,6 +138,7 @@ pub(super) struct App {
     workspace: workspace::Workspace,
     tick: usize,
     mascot: mascot::Mascot,
+    // Colors the last turn's error; it must not disable the input.
     failed: bool,
     // A child can run tools while the parent's sub_agent call is still active.
     active_tools: HashMap<&'static str, ToolActivity>,
@@ -191,12 +192,14 @@ impl App {
         });
         self.blank();
         self.working = true;
+        self.failed = false;
         self.mascot.set_activity(mascot::Activity::Thinking);
         prompt
     }
 
     pub(super) fn finish_turn(&mut self, result: Result<String>) {
         self.working = false;
+        self.failed = result.is_err();
         self.active_tools.clear();
         self.mascot.set_activity(if result.is_ok() {
             mascot::Activity::Success
@@ -206,7 +209,6 @@ impl App {
         if let Err(error) = result {
             self.push(format!("[error] {error:#}"), Style::new().red());
             self.blank();
-            self.failed = true;
         }
     }
 
@@ -388,7 +390,7 @@ impl App {
             self.mascot.interact();
         }
         match key.code {
-            KeyCode::Enter if !self.failed && !self.input.trim().is_empty() => InputAction::Submit,
+            KeyCode::Enter if !self.input.trim().is_empty() => InputAction::Submit,
             KeyCode::Backspace => {
                 self.input.pop();
                 InputAction::None
@@ -795,7 +797,7 @@ mod tests {
             InputAction::None
         );
         app.failed = true;
-        assert_eq!(app.handle_event(enter()), InputAction::None);
+        assert_eq!(app.handle_event(enter()), InputAction::Submit);
         assert_eq!(
             app.handle_event(Event::Key(KeyEvent::new(
                 KeyCode::Char('c'),
@@ -1362,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn finishing_a_turn_preserves_the_next_draft_and_rejects_failed_sessions() {
+    fn finishing_a_turn_preserves_the_next_draft_and_allows_submission_after_failure() {
         let mut app = App {
             input: "first prompt".into(),
             ..App::default()
@@ -1375,13 +1377,18 @@ mod tests {
         assert!(!app.working);
         app.finish_turn(Err(anyhow::anyhow!("request failed")));
         assert!(app.failed);
+        assert!(!app.working);
+        assert_eq!(app.input, "next draft");
         assert_eq!(
             app.handle_event(Event::Key(KeyEvent::new(
                 KeyCode::Enter,
                 KeyModifiers::NONE
             ))),
-            InputAction::None
+            InputAction::Submit
         );
+        assert_eq!(app.submit(), "next draft");
+        assert!(app.working);
+        assert!(!app.failed);
         assert!(
             app.pending
                 .iter()

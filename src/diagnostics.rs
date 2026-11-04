@@ -53,6 +53,9 @@ enum Content<'a> {
     ProtocolResponse {
         body: model::Body<'a>,
     },
+    HttpErrorResponse {
+        body: model::Body<'a>,
+    },
     ToolCall {
         tool_call_id: &'a str,
         name: &'a str,
