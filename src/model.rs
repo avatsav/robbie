@@ -10,11 +10,22 @@ use anyhow::{Context, Result, bail};
 use reqwest::{Client, RequestBuilder, StatusCode, header::RETRY_AFTER};
 use serde_json::Value;
 
+use crate::diagnostics::{
+    Recorder,
+    agent::AgentTurn,
+    model::{
+        AttemptOutcome, ModelRequest, RequestOrigin, RequestOutcome, RetryStop, TransportFailure,
+    },
+    tool::ToolContext,
+};
+
 mod conversation;
+mod metadata;
 mod protocol;
 mod provider;
 
 pub use conversation::{Message, Output, Reply, ToolCall, ToolResult};
+pub use metadata::ResponseMetadata;
 pub use protocol::{AnthropicMessages, Protocol};
 pub use provider::{OpenRouter, Provider};
 
@@ -25,6 +36,13 @@ pub struct ModelClient {
     provider: OpenRouter,
     protocol: AnthropicMessages,
     model: String,
+    recorder: Recorder,
+}
+
+// Local correlation belongs to the exchange, not protocol continuation/history.
+pub struct Completion {
+    pub reply: Reply,
+    pub request_id: u64,
 }
 
 impl ModelClient {
@@ -33,12 +51,14 @@ impl ModelClient {
         provider: OpenRouter,
         protocol: AnthropicMessages,
         model: String,
+        recorder: Recorder,
     ) -> Self {
         Self {
             http,
             provider,
             protocol,
             model,
+            recorder,
         }
     }
 
@@ -46,16 +66,60 @@ impl ModelClient {
         &self.model
     }
 
+    pub fn agent_turn(&self, source: &'static str, parent: Option<ToolContext>) -> AgentTurn {
+        self.recorder.agent_turn(source, parent)
+    }
+
     pub async fn complete(
         &self,
+        origin: impl Into<RequestOrigin>,
         system: &str,
         messages: &[Message],
         tools: &[Value],
-    ) -> Result<Reply> {
+    ) -> Result<Completion> {
+        self.complete_with_policy(origin, system, messages, tools, Policy::default())
+            .await
+    }
+
+    async fn complete_with_policy(
+        &self,
+        origin: impl Into<RequestOrigin>,
+        system: &str,
+        messages: &[Message],
+        tools: &[Value],
+        policy: Policy,
+    ) -> Result<Completion> {
         let encoded = self.protocol.encode(&self.model, system, messages, tools);
-        let request = self.provider.prepare(&self.http, encoded)?;
-        let body = send(request).await?;
-        self.protocol.decode(body)
+        let prepared = self.provider.prepare(&self.http, encoded)?;
+        let mut trace = self
+            .recorder
+            .model_request(origin, &self.model, &prepared.body);
+        // Recording borrowed the body synchronously. Do not retain an extra
+        // conversation-sized JSON value across HTTP waits and backoff.
+        drop(prepared.body);
+        let body = match exchange(prepared.request, policy, &trace).await {
+            Ok(body) => body,
+            Err(error) => {
+                trace.finish(RequestOutcome::ExchangeFailed);
+                return Err(error);
+            }
+        };
+        // Preserve available facts even if executable-block validation fails.
+        // Metadata stays out of history and never authorizes tool execution.
+        trace.response(&self.protocol.response_metadata(&body));
+        match self.protocol.decode(body) {
+            Ok(reply) => {
+                trace.finish(RequestOutcome::Succeeded);
+                Ok(Completion {
+                    reply,
+                    request_id: trace.id(),
+                })
+            }
+            Err(error) => {
+                trace.finish(RequestOutcome::ProtocolDecodeFailed);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -73,8 +137,22 @@ pub fn client() -> Result<Client> {
         .context("could not create model HTTP client")
 }
 
-pub async fn send(request: RequestBuilder) -> Result<Value> {
+#[cfg(test)]
+async fn send(request: RequestBuilder) -> Result<Value> {
     send_with_policy(request, Policy::default()).await
+}
+
+#[cfg(test)]
+async fn send_with_policy(request: RequestBuilder, policy: Policy) -> Result<Value> {
+    let recorder = Recorder::disabled();
+    let mut trace = recorder.model_request("test", "test", &Value::Null);
+    let result = exchange(request, policy, &trace).await;
+    trace.finish(if result.is_ok() {
+        RequestOutcome::Succeeded
+    } else {
+        RequestOutcome::ExchangeFailed
+    });
+    result
 }
 
 // Private timing seam: tests exercise real HTTP with millisecond waits.
@@ -141,18 +219,38 @@ fn retryable_transport(error: &reqwest::Error) -> bool {
         || error.is_decode()
 }
 
-async fn send_with_policy(request: RequestBuilder, policy: Policy) -> Result<Value> {
+fn transport_failure(error: &reqwest::Error) -> TransportFailure {
+    if error.is_timeout() {
+        TransportFailure::Timeout
+    } else if error.is_connect() {
+        TransportFailure::Connect
+    } else if error.is_body() || error.is_decode() {
+        TransportFailure::Body
+    } else if error.is_request() {
+        TransportFailure::Request
+    } else {
+        TransportFailure::Other
+    }
+}
+
+async fn exchange(request: RequestBuilder, policy: Policy, trace: &ModelRequest) -> Result<Value> {
     for retry in 0..=MAX_RETRIES {
         let attempt = retry + 1;
+        let mut observation = trace.attempt(attempt);
         // JSON requests are buffered/cloneable; streaming bodies must not be
         // partially consumed and then silently replayed.
-        let next = request
-            .try_clone()
-            .context("model request body cannot be replayed")?
-            .timeout(policy.attempt_timeout);
+        let next = match request.try_clone() {
+            Some(next) => next.timeout(policy.attempt_timeout),
+            None => {
+                observation.finish(AttemptOutcome::Unreplayable, None);
+                trace.retry_stopped(attempt, RetryStop::PermanentFailure);
+                bail!("model request body cannot be replayed");
+            }
+        };
         let outcome = async {
             let response = next.send().await?;
             let status = response.status();
+            observation.status(status.as_u16());
             if !status.is_success() {
                 let retry_after = response
                     .headers()
@@ -171,23 +269,59 @@ async fn send_with_policy(request: RequestBuilder, policy: Policy) -> Result<Val
             Ok(Ok(bytes)) => {
                 // A fully received but invalid response is not a transport
                 // failure. Do not retry JSON errors or execute partial output.
-                return serde_json::from_slice(&bytes)
+                let parsed = serde_json::from_slice(&bytes);
+                observation.finish(
+                    if parsed.is_ok() {
+                        AttemptOutcome::Succeeded
+                    } else {
+                        AttemptOutcome::InvalidJson
+                    },
+                    Some(&bytes),
+                );
+                return parsed
                     .with_context(|| format!("invalid model response after {attempt} attempt(s)"));
             }
             Ok(Err((status, retry_after))) => {
+                observation.finish(AttemptOutcome::HttpError, None);
                 let message = format!("model API returned {status} after {attempt} attempt(s)");
                 if !retryable_status(status) || retry == MAX_RETRIES {
+                    trace.retry_stopped(
+                        attempt,
+                        if !retryable_status(status) {
+                            RetryStop::PermanentFailure
+                        } else {
+                            RetryStop::BudgetExhausted
+                        },
+                    );
                     bail!(message);
                 }
-                policy
-                    .delay(retry, retry_after.as_deref())
-                    .with_context(|| message)?
+                match policy.delay(retry, retry_after.as_deref()) {
+                    Ok(delay) => delay,
+                    Err(error) => {
+                        trace.retry_stopped(attempt, RetryStop::DelayLimit);
+                        return Err(error).with_context(|| message);
+                    }
+                }
             }
             Err(error) => {
+                observation.finish(
+                    AttemptOutcome::TransportError {
+                        reason: transport_failure(&error),
+                    },
+                    None,
+                );
                 let retryable = retryable_transport(&error);
                 // URLs may contain sensitive parameters; do not expose them.
                 let error = error.without_url();
                 if !retryable || retry == MAX_RETRIES {
+                    trace.retry_stopped(
+                        attempt,
+                        if !retryable {
+                            RetryStop::PermanentFailure
+                        } else {
+                            RetryStop::BudgetExhausted
+                        },
+                    );
                     return Err(error).with_context(|| {
                         format!("model request failed after {attempt} attempt(s)")
                     });
@@ -195,6 +329,7 @@ async fn send_with_policy(request: RequestBuilder, policy: Policy) -> Result<Val
                 policy.delay(retry, None)?
             }
         };
+        trace.retry(attempt, delay);
         // Dropping this future cancels the wait/request; no detached retry task.
         tokio::time::sleep(delay).await;
     }
@@ -202,7 +337,7 @@ async fn send_with_policy(request: RequestBuilder, policy: Policy) -> Result<Val
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::{
         collections::VecDeque,
@@ -217,14 +352,15 @@ mod tests {
 
     const SUCCESS: &str = r#"{"content":[{"type":"text","text":"done"}]}"#;
 
-    enum Reply {
+    pub(crate) enum Reply {
         Http(u16, &'static str, &'static str),
         Disconnect,
         TruncatedBody,
         Stall,
+        StallBody,
     }
 
-    struct Server {
+    pub(crate) struct Server {
         url: String,
         requests: Arc<Mutex<Vec<String>>>,
         stop: Arc<AtomicBool>,
@@ -232,7 +368,7 @@ mod tests {
     }
 
     impl Server {
-        fn new(replies: Vec<Reply>) -> Self {
+        pub(crate) fn new(replies: Vec<Reply>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let url = format!("http://{}/messages", listener.local_addr().unwrap());
@@ -283,10 +419,11 @@ mod tests {
                         .lock()
                         .unwrap()
                         .push(String::from_utf8(request).unwrap());
-                    match replies
-                        .pop_front()
-                        .unwrap_or(Reply::Http(400, "", "unexpected request"))
-                    {
+                    let reply =
+                        replies
+                            .pop_front()
+                            .unwrap_or(Reply::Http(400, "", "unexpected request"));
+                    match reply {
                         Reply::Http(status, headers, body) => {
                             let response = format!(
                                 "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
@@ -299,7 +436,11 @@ mod tests {
                             let _ = socket
                                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{");
                         }
-                        Reply::Stall => {
+                        Reply::Stall | Reply::StallBody => {
+                            if matches!(reply, Reply::StallBody) {
+                                let _ = socket
+                                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{");
+                            }
                             while !worker_stop.load(Ordering::SeqCst) {
                                 thread::sleep(Duration::from_millis(1));
                             }
@@ -330,16 +471,21 @@ mod tests {
         }
 
         fn model(&self) -> Arc<ModelClient> {
+            self.model_with_recorder(Recorder::disabled())
+        }
+
+        pub(crate) fn model_with_recorder(&self, recorder: Recorder) -> Arc<ModelClient> {
             Arc::new(ModelClient::new(
                 client().unwrap(),
                 OpenRouter::new("test-secret".into(), Some("test-provider".into()))
                     .with_base_url(self.url.strip_suffix("/messages").unwrap().to_owned()),
                 AnthropicMessages,
                 "test".into(),
+                recorder,
             ))
         }
 
-        fn count(&self) -> usize {
+        pub(crate) fn count(&self) -> usize {
             self.requests.lock().unwrap().len()
         }
     }
@@ -357,6 +503,13 @@ mod tests {
             attempt_timeout: Duration::from_secs(2),
         }
     }
+
+    #[cfg(unix)]
+    mod agent_diagnostics;
+    #[cfg(unix)]
+    pub(crate) mod diagnostics;
+    #[cfg(unix)]
+    mod tool_diagnostics;
 
     #[tokio::test]
     async fn success_uses_one_attempt_through_the_production_interface() {
@@ -411,7 +564,7 @@ mod tests {
                     assert!(!is_error);
                     finished += 1;
                 }
-                EventKind::AssistantText(_) => replies += 1,
+                EventKind::AssistantText(..) => replies += 1,
                 _ => {}
             }
         }

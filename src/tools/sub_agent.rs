@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolRegistry};
-use crate::Agent;
 use crate::skills::SkillRegistry;
+use crate::{Agent, diagnostics::tool::ToolContext};
 
 pub(super) struct SubAgent {
     pub(super) model: Arc<crate::model::ModelClient>,
@@ -44,6 +44,14 @@ impl Tool for SubAgent {
     }
 
     async fn execute(&mut self, input: &Value) -> (String, bool) {
+        self.execute_in_context(input, None).await
+    }
+
+    async fn execute_in_context(
+        &mut self,
+        input: &Value,
+        parent: Option<ToolContext>,
+    ) -> (String, bool) {
         let Some(prompt) = input
             .get("prompt")
             .and_then(Value::as_str)
@@ -53,7 +61,7 @@ impl Tool for SubAgent {
             return ("Error: prompt must be a non-empty string".to_string(), true);
         };
         let mut child = self.new_child();
-        match child.run(prompt).await {
+        match child.run_with_parent(prompt, parent).await {
             Ok(response) => (response, false),
             Err(error) => (format!("Subagent failed: {error:#}"), true),
         }
@@ -72,6 +80,7 @@ mod tests {
                 crate::model::OpenRouter::new("test".into(), None),
                 crate::model::AnthropicMessages,
                 "test/model".into(),
+                crate::diagnostics::Recorder::disabled(),
             )),
             events,
             skills: Arc::new(SkillRegistry::default()),
@@ -150,11 +159,14 @@ mod tests {
         let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         tool.events = events;
         let child = tool.new_child();
-        child.emit(crate::events::EventKind::AssistantText("Hello".into()));
+        child.emit(crate::events::EventKind::AssistantText(
+            "Hello".into(),
+            None,
+        ));
         let event = receiver.try_recv().unwrap();
         assert_eq!(event.source, "subagent");
         assert!(
-            matches!(event.kind, crate::events::EventKind::AssistantText(text) if text == "Hello")
+            matches!(event.kind, crate::events::EventKind::AssistantText(text, _) if text == "Hello")
         );
         assert!(receiver.try_recv().is_err());
     }

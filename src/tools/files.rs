@@ -172,13 +172,47 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
+    #[test]
+    fn blocked_file_read_does_not_block_the_executor() {
+        let workspace = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().canonicalize().unwrap();
+        assert!(
+            !scratch.starts_with(&workspace),
+            "FIFO fixture workspace must be outside the repository"
+        );
+        // Exercise the real tool with an isolated cwd: changing this process's
+        // cwd would race other tests, and an outside path must remain forbidden.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tools::files::tests::blocked_file_read_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .current_dir(&scratch)
+            .env("ROBBIE_FILE_TEST_WORKSPACE", &scratch)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "FIFO fixture failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Explicit close verifies cleanup; TempDir also cleans up on assertion unwind.
+        root.close().unwrap();
+    }
+
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
-    async fn blocked_file_read_does_not_block_the_executor() {
+    #[ignore = "subprocess fixture; run blocked_file_read_does_not_block_the_executor"]
+    async fn blocked_file_read_fixture() {
         use std::time::{Duration, Instant};
-        let root = std::env::current_dir()
-            .unwrap()
-            .join(format!(".robbie-fifo-test-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let expected = std::env::var_os("ROBBIE_FILE_TEST_WORKSPACE")
+            .expect("requires a temporary workspace supplied by the parent test");
+        let root = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(root, PathBuf::from(expected).canonicalize().unwrap());
         let fifo = root.join("pipe");
         assert!(
             std::process::Command::new("mkfifo")
@@ -203,7 +237,6 @@ mod tests {
         };
         let ((output, is_error), latency) = tokio::join!(tool.execute(&input), heartbeat);
         writer.join().unwrap();
-        std::fs::remove_dir_all(root).unwrap();
         assert_eq!(output, "released");
         assert!(!is_error);
         assert!(

@@ -1,12 +1,20 @@
 //! Connection/authentication policy for an API host, independent of wire format.
 use anyhow::Result;
 use reqwest::{Client, RequestBuilder};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::protocol::EncodedRequest;
 
+// Retain the final JSON body independently of headers/authentication. Diagnostics
+// can capture exactly the provider-prepared protocol payload without inspecting
+// or serializing a credential-bearing HTTP request.
+pub struct PreparedRequest {
+    pub request: RequestBuilder,
+    pub body: Value,
+}
+
 pub trait Provider {
-    fn prepare(&self, http: &Client, request: EncodedRequest) -> Result<RequestBuilder>;
+    fn prepare(&self, http: &Client, request: EncodedRequest) -> Result<PreparedRequest>;
 }
 
 pub struct OpenRouter {
@@ -33,11 +41,11 @@ impl OpenRouter {
 }
 
 impl Provider for OpenRouter {
-    fn prepare(&self, http: &Client, mut request: EncodedRequest) -> Result<RequestBuilder> {
+    fn prepare(&self, http: &Client, mut request: EncodedRequest) -> Result<PreparedRequest> {
         if let Some(upstream) = &self.upstream {
             request.body["provider"] = json!({"only": [upstream]});
         }
-        Ok(http
+        let prepared = http
             .post(format!(
                 "{}{}",
                 self.base_url.trim_end_matches('/'),
@@ -49,7 +57,11 @@ impl Provider for OpenRouter {
             // miss/expire and concurrent requests can still both be billed.
             // Uses OpenRouter's default TTL; cached responses may include tools.
             .header("X-OpenRouter-Cache", "true")
-            .json(&request.body))
+            .json(&request.body);
+        Ok(PreparedRequest {
+            request: prepared,
+            body: request.body,
+        })
     }
 }
 
@@ -71,6 +83,7 @@ mod tests {
         let request = OpenRouter::new("test-key".into(), Some("test-upstream".into()))
             .prepare(&http, encoded)
             .unwrap()
+            .request
             .build()
             .unwrap();
         assert_eq!(
@@ -98,6 +111,7 @@ mod tests {
         let request = OpenRouter::new("test".into(), None)
             .prepare(&Client::new(), encoded)
             .unwrap()
+            .request
             .build()
             .unwrap();
         assert_eq!(
@@ -118,6 +132,7 @@ mod tests {
         let request = OpenRouter::new("test".into(), None)
             .prepare(&Client::new(), encoded)
             .unwrap()
+            .request
             .build()
             .unwrap();
         let body: Value =

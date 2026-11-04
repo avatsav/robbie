@@ -1,3 +1,4 @@
+use crate::diagnostics::frontend::TextContext;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -11,7 +12,9 @@ pub struct AgentEvent {
 #[derive(Debug)]
 pub enum EventKind {
     ModelStarted,
-    AssistantText(String),
+    // Real agent text always carries immutable correlation. None permits
+    // unrecorded frontend fixtures without inventing model/turn identities.
+    AssistantText(String, Option<TextContext>),
     ToolStarted {
         name: String,
         input: Value,

@@ -12,6 +12,7 @@ use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
+    diagnostics::frontend::TextAppend,
     events::{AgentEvent, EventKind},
     markdown::Markdown,
 };
@@ -50,6 +51,10 @@ impl ToolOutputMode {
             Self::Full => Self::Concise,
         }
     }
+}
+
+pub(super) struct ActivityReceipt {
+    pub assistant: Option<TextAppend>,
 }
 
 pub(super) struct ToolOutcome {
@@ -160,6 +165,11 @@ impl App {
         self.blank();
     }
 
+    pub(super) fn notice(&mut self, text: impl Into<String>) {
+        self.push(text, Style::new().fg(MUTED_TEXT));
+        self.blank();
+    }
+
     fn push(&mut self, text: impl Into<String>, style: Style) {
         let text = clean(&text.into());
         for line in text.split('\n') {
@@ -200,12 +210,13 @@ impl App {
         }
     }
 
-    pub(super) fn activity(&mut self, event: AgentEvent) {
+    pub(super) fn activity(&mut self, event: AgentEvent) -> ActivityReceipt {
+        let mut receipt = ActivityReceipt { assistant: None };
         self.working = true;
         let source = event.source;
         match event.kind {
             EventKind::ModelStarted => {}
-            EventKind::AssistantText(text) => {
+            EventKind::AssistantText(text, context) => {
                 if self.needs_text_separator {
                     self.blank();
                 }
@@ -214,8 +225,17 @@ impl App {
                     // heading, list, or code fence is still parsed as a block.
                     self.push("[agent]", Style::new());
                 }
+                let sanitized = clean(&text);
+                receipt.assistant = context.map(|context| TextAppend {
+                    context,
+                    sanitized_bytes: sanitized.len(),
+                    non_whitespace_chars: sanitized
+                        .chars()
+                        .filter(|ch| !ch.is_whitespace())
+                        .count(),
+                });
                 self.pending
-                    .push(OutputLine::Markdown(Markdown::new(clean(&text))));
+                    .push(OutputLine::Markdown(Markdown::new(sanitized)));
                 self.blank();
             }
             EventKind::ToolStarted { name, input } => {
@@ -309,6 +329,7 @@ impl App {
             }
         }
         self.sync_mascot_activity();
+        receipt
     }
 
     fn sync_mascot_activity(&mut self) {
@@ -555,6 +576,17 @@ mod tests {
     }
 
     #[test]
+    fn notices_are_visible_plain_text_without_marking_a_turn_failed() {
+        let mut app = App::default();
+        app.notice("[warning] Diagnostics unavailable\u{1b}[31m");
+        let output = app.take_output();
+        assert!(matches!(&output[0], OutputLine::Wrapped((text, _))
+            if text.contains("[warning] Diagnostics unavailable") && !text.contains('\u{1b}')));
+        assert!(!app.failed);
+        assert!(!app.working);
+    }
+
+    #[test]
     fn banner_brand_is_bold_white_and_metadata_is_regular_white() -> Result<()> {
         use ratatui::style::Modifier;
         let mut terminal = Terminal::new(TestBackend::new(100, 12))?;
@@ -671,9 +703,7 @@ mod tests {
     fn assistant_markdown_preserves_styles_and_drains_once() -> Result<()> {
         use ratatui::style::Modifier;
         let mut app = App::default();
-        app.activity(AgentEvent { source: "main", kind: EventKind::AssistantText(
-            "## Heading\n\n**bold** and `code`\n\n```rust\n    literal **code**\n```\n\n> quoted `code`".into(),
-        ) });
+        app.activity(AgentEvent { source: "main", kind: EventKind::AssistantText("## Heading\n\n**bold** and `code`\n\n```rust\n    literal **code**\n```\n\n> quoted `code`".into(), None) });
         let mut terminal = Terminal::new(TestBackend::new(80, 24))?;
         render_output(&mut terminal, &mut app)?;
         let buffer = terminal.backend().buffer();
@@ -728,6 +758,7 @@ mod tests {
             source: "subagent",
             kind: EventKind::AssistantText(
                 "# Child\n\n```\n    **literal**\n```\n\nhello\u{1b}[31m".into(),
+                None,
             ),
         });
         let rows = app
@@ -1120,7 +1151,7 @@ mod tests {
         app.pending.clear();
         app.activity(AgentEvent {
             source: "main",
-            kind: EventKind::AssistantText("assistant answer".into()),
+            kind: EventKind::AssistantText("assistant answer".into(), None),
         });
         assert_eq!(app.pending[0].rows(80)[0].style, Style::new());
         app.pending.clear();

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::skills::SkillRegistry;
+use crate::{diagnostics::tool::ToolContext, skills::SkillRegistry};
 
 mod files;
 mod load_skill;
@@ -19,6 +19,15 @@ trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn schema(&self) -> Value;
     async fn execute(&mut self, input: &Value) -> (String, bool);
+
+    // Most tools ignore tracing context; delegation forwards it to the child.
+    async fn execute_in_context(
+        &mut self,
+        input: &Value,
+        _parent: Option<ToolContext>,
+    ) -> (String, bool) {
+        self.execute(input).await
+    }
 }
 
 pub struct ToolRegistry {
@@ -80,9 +89,19 @@ impl ToolRegistry {
         tools.iter().map(|tool| tool.schema()).collect()
     }
 
+    #[cfg(test)]
     pub async fn execute(&mut self, name: &str, input: &Value) -> (String, bool) {
+        self.execute_in_context(name, input, None).await
+    }
+
+    pub async fn execute_in_context(
+        &mut self,
+        name: &str,
+        input: &Value,
+        parent: Option<ToolContext>,
+    ) -> (String, bool) {
         match self.tools.get_mut(name) {
-            Some(tool) => tool.execute(input).await,
+            Some(tool) => tool.execute_in_context(input, parent).await,
             None => (format!("Unknown tool: {name}"), true),
         }
     }

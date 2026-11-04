@@ -322,7 +322,7 @@ mod tests {
                     output: "[exit 0]".into(),
                     is_error: false,
                 },
-                EventKind::AssistantText("done".into()),
+                EventKind::AssistantText("done".into(), None),
             ] {
                 app.activity(AgentEvent { source, kind });
                 assert_eq!(screen(&app, 100, 5), working);

@@ -21,12 +21,19 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     Agent,
-    events::AgentEvent,
+    diagnostics::{
+        Recorder,
+        frontend::{UiEnd, UiTurn},
+    },
+    events::{AgentEvent, EventKind},
     ui::{self, InputAction, OutputLine},
 };
 
 mod selection;
 use selection::Selection;
+
+#[cfg(all(test, unix))]
+mod diagnostics_tests;
 
 // UI state owns formatting/input; this screen owns the transcript and viewport.
 #[derive(Default)]
@@ -40,6 +47,8 @@ struct App {
     visible_start: usize,
     rendered_rows: Vec<Line<'static>>,
     pending_copy: Option<String>,
+    recorder: Option<Recorder>,
+    ui_turn: Option<UiTurn>,
 }
 
 impl App {
@@ -50,7 +59,41 @@ impl App {
     }
 
     fn activity(&mut self, event: AgentEvent) {
-        self.content.activity(event);
+        if let EventKind::AssistantText(text, Some(context)) = &event.kind
+            && let Some(turn) = &mut self.ui_turn
+        {
+            turn.received(*context, text);
+        }
+        let receipt = self.content.activity(event);
+        if let Some(append) = receipt.assistant
+            && let Some(turn) = &mut self.ui_turn
+        {
+            turn.appended(append);
+        }
+    }
+
+    fn end_ui_turn(&mut self, end: UiEnd) {
+        if let Some(turn) = self.ui_turn.take() {
+            turn.finish(end);
+        }
+    }
+
+    fn finish_turn(&mut self, result: Result<String>) {
+        let end = match &result {
+            Ok(text) => UiEnd::Completed {
+                returned_text_bytes: text.len(),
+            },
+            Err(_) => UiEnd::AgentFailed,
+        };
+        self.content.finish_turn(result);
+        self.end_ui_turn(end);
+        self.recording_warning();
+    }
+
+    fn recording_warning(&mut self) {
+        if let Some(warning) = self.recorder.as_ref().and_then(Recorder::take_warning) {
+            self.content.notice(format!("[warning] {warning}"));
+        }
     }
 
     fn rows(&mut self, width: usize) -> Vec<Line<'static>> {
@@ -259,17 +302,25 @@ impl TerminalState {
     }
 }
 
-pub async fn run(mut agent: Agent, mut receiver: UnboundedReceiver<AgentEvent>) -> Result<()> {
+pub async fn run(
+    mut agent: Agent,
+    mut receiver: UnboundedReceiver<AgentEvent>,
+    recorder: Recorder,
+) -> Result<()> {
     let terminal_state = TerminalState::capture();
     let mut terminal = ratatui::init();
     let result = async {
         let _modes = ScreenModes::new()?;
-        run_app(&mut terminal, &mut agent, &mut receiver).await
+        run_app(&mut terminal, &mut agent, &mut receiver, &recorder).await
     }
     .await;
     // Restore the alternate screen on both normal return and error paths.
     ratatui::restore();
     drop(terminal_state);
+    // A failure during cancellation/cleanup may occur after the last UI draw.
+    if let Some(warning) = recorder.take_warning() {
+        eprintln!("[warning] {warning}");
+    }
     result
 }
 
@@ -277,8 +328,15 @@ async fn run_app(
     terminal: &mut DefaultTerminal,
     agent: &mut Agent,
     receiver: &mut UnboundedReceiver<AgentEvent>,
+    recorder: &Recorder,
 ) -> Result<()> {
     let mut app = App::new(agent.model.model_name());
+    app.recorder = Some(recorder.clone());
+    if let Some(warning) = recorder.take_warning() {
+        app.content.notice(format!("[warning] {warning}"));
+    } else if let Some(description) = recorder.description() {
+        app.content.notice(description);
+    }
     // Capability probing owns stdin briefly, before EventStream starts reading.
     app.content.configure_mascot_graphics();
     let mut workspace = ui::WorkspaceMonitor::start();
@@ -292,18 +350,27 @@ async fn run_app(
         }
         let prompt = app.content.submit();
         app.scroll_back = 0;
+        let turn = agent.model.agent_turn(agent.source, None);
+        app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
         match run_turn(
             terminal,
             &mut app,
             &mut keys,
             receiver,
             &mut workspace,
-            agent.run(prompt.trim()),
+            agent.run_in_turn(prompt.trim(), turn),
         )
-        .await?
+        .await
         {
-            TurnOutcome::Finished(result) => app.content.finish_turn(result),
-            TurnOutcome::Quit => return Ok(()),
+            Ok(TurnOutcome::Finished(result)) => app.finish_turn(result),
+            Ok(TurnOutcome::Quit) => {
+                app.end_ui_turn(UiEnd::Quit);
+                return Ok(());
+            }
+            Err(error) => {
+                app.end_ui_turn(UiEnd::FrontendFailed);
+                return Err(error);
+            }
         }
     }
 }
@@ -326,6 +393,7 @@ async fn wait_for_input(
     let mut ticks = tokio::time::interval(ui::ANIMATION_TICK);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        app.recording_warning();
         draw(terminal, app)?;
         tokio::select! {
             event = keys.next() => {
@@ -360,10 +428,12 @@ async fn run_turn(
     let mut ticks = tokio::time::interval(ui::ANIMATION_TICK);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        app.recording_warning();
         draw(terminal, app)?;
         tokio::select! {
             result = &mut run => {
                 while let Ok(event) = receiver.try_recv() { app.activity(event); }
+                app.recording_warning();
                 return Ok(TurnOutcome::Finished(result));
             }
             Some(event) = receiver.recv() => app.activity(event),
@@ -400,8 +470,36 @@ mod tests {
     fn assistant(app: &mut App, text: impl Into<String>) {
         app.activity(AgentEvent {
             source: "main",
-            kind: EventKind::AssistantText(text.into()),
+            kind: EventKind::AssistantText(text.into(), None),
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_recorder_failure_becomes_one_visible_notice_without_losing_the_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Recorder::for_test(root.path(), false);
+        let mut app = App::new("test/model");
+        app.recorder = Some(recorder.clone());
+        app.handle_event(Event::Paste("my next draft".into()));
+        recorder.break_writer_for_test();
+        drop(recorder.model_request("main", "test/model", &json!({})));
+        app.recording_warning();
+        app.recording_warning();
+        let text = history(&mut app);
+        assert_eq!(
+            text.matches("[warning] Diagnostics recording failed")
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE
+            ))),
+            InputAction::Submit
+        );
+        assert_eq!(app.content.submit(), "my next draft");
     }
 
     #[cfg(unix)]
@@ -433,7 +531,7 @@ mod tests {
                     }})?;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     let answer = "## Dependencies\n\n**Dependency-summary-rendered-successfully**\n\n```rust\nlet markdown_fixture = true;\n```\n\n> Quoted-fixture";
-                    sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText(answer.into()) })?;
+                    sender.send(AgentEvent { source: "main", kind: EventKind::AssistantText(answer.into(), None) })?;
                     Ok(answer.into())
                 };
                 match run_turn(&mut terminal, &mut app, &mut keys, &mut receiver, &mut workspace, work).await? {
