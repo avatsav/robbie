@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
+mod agent;
 mod diagnostics;
 mod events;
 mod fullscreen;
@@ -11,151 +12,9 @@ mod skills;
 mod terminal_text;
 mod tools;
 mod ui;
-use diagnostics::{
-    agent::{Decision, TurnEnd},
-    tool::ToolContext,
-};
-use events::{AgentEvent, EventKind, EventSender};
-use model::{AnthropicMessages, Message, ModelClient, OpenRouter, Output, ToolResult};
+use agent::Agent;
+use model::{AnthropicMessages, ModelClient, OpenRouter};
 use tools::ToolRegistry;
-
-const SYSTEM: &str = "You are a coding agent. Use tools to inspect and change the workspace. Load relevant skills before acting, then report clearly.";
-
-struct Agent {
-    model: Arc<ModelClient>,
-    tools: ToolRegistry,
-    events: EventSender,
-    source: &'static str,
-    // Keep complete assistant content blocks, including tool-use IDs, for the next request.
-    // TODO: When adding conversation persistence or turn resumption, repair
-    // incomplete tool exchanges. A missing result may mean the tool's outcome is
-    // unknown, not that it was cancelled; do not blindly retry side effects.
-    messages: Vec<Message>,
-}
-
-impl Agent {
-    fn system_prompt(&self) -> String {
-        let descriptions = self.tools.skill_descriptions();
-        if descriptions.is_empty() {
-            SYSTEM.to_string()
-        } else {
-            format!(
-                "{SYSTEM}\n\nAvailable skills (use load_skill for full instructions):\n{descriptions}"
-            )
-        }
-    }
-
-    fn emit(&self, kind: EventKind) -> bool {
-        // A closed frontend must not turn a completed tool into a failed call.
-        self.events
-            .send(AgentEvent {
-                source: self.source,
-                kind,
-            })
-            .is_ok()
-    }
-
-    // Headless test convenience. The fullscreen host prepares the root guard
-    // first, so its UI span shares the identity even before work is polled.
-    #[cfg(test)]
-    async fn run(&mut self, prompt: &str) -> Result<String> {
-        self.run_with_parent(prompt, None).await
-    }
-
-    async fn run_with_parent(
-        &mut self,
-        prompt: &str,
-        parent: Option<ToolContext>,
-    ) -> Result<String> {
-        let turn = self.model.agent_turn(self.source, parent);
-        self.run_in_turn(prompt, turn).await
-    }
-
-    async fn run_in_turn(
-        &mut self,
-        prompt: &str,
-        mut turn: diagnostics::agent::AgentTurn,
-    ) -> Result<String> {
-        self.messages.push(Message::User(prompt.to_owned()));
-
-        loop {
-            self.emit(EventKind::ModelStarted);
-            // Only complete() retries HTTP. History changes and tool execution
-            // stay outside it, for parent and child alike.
-            let model::Completion { reply, request_id } = match self
-                .model
-                .complete(
-                    turn.model_call(),
-                    &self.system_prompt(),
-                    &self.messages,
-                    &self.tools.schemas(),
-                )
-                .await
-            {
-                Ok(completion) => completion,
-                Err(error) => {
-                    turn.finish(TurnEnd::ModelFailed);
-                    return Err(error);
-                }
-            };
-            self.messages.push(Message::Assistant(reply.clone()));
-
-            let mut results = Vec::new();
-            for output in &reply.output {
-                match output {
-                    Output::Text(text) => {
-                        let context = turn.assistant_text(request_id, text);
-                        let enqueued =
-                            self.emit(EventKind::AssistantText(text.clone(), Some(context)));
-                        turn.text_emitted(context, text, enqueued);
-                    }
-                    Output::ToolCall(call) => {
-                        let execution = turn.tool_execution(request_id, call);
-                        self.emit(EventKind::ToolStarted {
-                            name: call.name.clone(),
-                            input: call.arguments.clone(),
-                        });
-                        let (output, is_error) = self
-                            .tools
-                            .execute_in_context(
-                                &call.name,
-                                &call.arguments,
-                                Some(execution.context()),
-                            )
-                            .await;
-                        execution.finish(&output, is_error);
-                        turn.tool_result();
-                        self.emit(EventKind::ToolFinished {
-                            name: call.name.clone(),
-                            output: output.clone(),
-                            is_error,
-                        });
-                        results.push(ToolResult {
-                            tool_call_id: call.id.clone(),
-                            content: output,
-                            is_error,
-                        });
-                    }
-                }
-            }
-            if results.is_empty() {
-                turn.decision(request_id, Decision::StopNoToolResults, 0);
-                // Return only the final reply, not intermediate tool-use text.
-                let text = reply.text();
-                turn.finish(TurnEnd::NoToolResults {
-                    returned_text_bytes: text.len(),
-                });
-                return Ok(text);
-            }
-            turn.decision(
-                request_id,
-                Decision::ContinueAfterToolResults,
-                results.len(),
-            );
-            self.messages.push(Message::ToolResults(results));
-        }
-    }
-}
 
 fn validate_args(args: &[String]) -> Result<()> {
     if let Some(arg) = args.first() {
@@ -210,21 +69,9 @@ async fn run() -> Result<()> {
         )
         .with_prompt_cache(prompt_cache),
     );
-    let mut agent = Agent {
-        model,
-        tools: ToolRegistry::with_skills(skills),
-        events,
-        source: "main",
-        messages: Vec::new(),
-    };
-    agent
-        .tools
-        .enable_sub_agent(Arc::clone(&agent.model), agent.events.clone());
-
-    recorder.session_context(|| diagnostics::TranscriptContext {
-        system: agent.system_prompt(),
-        tools: agent.tools.schemas(),
-    });
+    let mut agent = Agent::new(model, ToolRegistry::with_skills(skills), events, "main");
+    agent.enable_sub_agent();
+    recorder.session_context(|| agent.transcript_context());
     fullscreen::run(agent, receiver, recorder).await
 }
 

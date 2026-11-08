@@ -210,7 +210,7 @@ Each item should be a focused, validated commit. Keep behavior changes separate 
 - [x] Bound file-read acquisition (fixed read-ahead, incremental UTF-8 prefix decoding, line/character limits; infinite-source and UTF-8 regressions).
 - [x] Reject structurally malformed response blocks before execution (decoder and real-agent HTTP regressions; unknown typed blocks remain lossless).
 - [x] Fix Unicode clipping, wrapping, and Backspace (grapheme-safe fragments/clipping/editing; cell-budget, styled Markdown, prompt, and input regressions).
-- [ ] Extract the agent module and hide its state.
+- [x] Extract the agent module and hide its state (private fields, constructor, explicit turn preparation; fixture-only test access).
 - [ ] Pass an explicit workspace path.
 - [ ] Cache flattened transcript rows across animation redraws.
 - [ ] Extract shared test support.

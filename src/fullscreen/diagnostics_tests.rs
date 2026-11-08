@@ -36,13 +36,7 @@ impl Fixture {
         let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
         let mut tools = ToolRegistry::new();
         tools.enable_sub_agent(model.clone(), events.clone());
-        let agent = Agent {
-            model,
-            tools,
-            events,
-            source: "main",
-            messages: Vec::new(),
-        };
+        let agent = Agent::new(model, tools, events, "main");
         let mut app = App {
             recorder: Some(recorder.clone()),
             ..App::default()
@@ -50,7 +44,7 @@ impl Fixture {
         app.handle_event(Event::Paste(PROMPT.into()));
         let prompt = app.content.submit();
         assert_eq!(prompt, PROMPT);
-        let turn = agent.model.agent_turn(agent.source, None);
+        let turn = agent.prepare_turn(None);
         if fail {
             recorder.break_writer_for_test();
         }
@@ -209,7 +203,7 @@ async fn sequential_ui_turns_reset_counts_and_text_sequence_without_reusing_turn
         if i == 1 {
             fixture.app.handle_event(Event::Paste(PROMPT.into()));
             let prompt = fixture.app.content.submit();
-            let turn = fixture.agent.model.agent_turn("main", None);
+            let turn = fixture.agent.prepare_turn(None);
             fixture.app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
             fixture.turn = Some(turn);
         }
@@ -461,7 +455,7 @@ async fn exhausted_rate_limit_retries_allow_the_next_user_message_to_complete() 
     );
     let prompt = fixture.app.content.submit();
     assert_eq!(prompt, "next prompt");
-    let turn = fixture.agent.model.agent_turn("main", None);
+    let turn = fixture.agent.prepare_turn(None);
     fixture.app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
     let result = tokio::time::timeout(
         Duration::from_secs(5),

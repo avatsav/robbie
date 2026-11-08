@@ -15,13 +15,12 @@ pub(super) struct SubAgent {
 
 impl SubAgent {
     fn new_child(&self) -> Agent {
-        Agent {
-            model: Arc::clone(&self.model),
-            tools: ToolRegistry::child(Arc::clone(&self.skills)),
-            events: self.events.clone(),
-            source: "subagent",
-            messages: Vec::new(),
-        }
+        Agent::new(
+            Arc::clone(&self.model),
+            ToolRegistry::child(Arc::clone(&self.skills)),
+            self.events.clone(),
+            "subagent",
+        )
     }
 }
 
@@ -90,17 +89,16 @@ mod tests {
     #[test]
     fn children_have_fresh_context_and_limited_tools() {
         let tool = sub_agent();
-        let mut first = tool.new_child();
-        first
-            .messages
-            .push(crate::model::Message::User("private".into()));
+        let first = tool
+            .new_child()
+            .with_history(vec![crate::model::Message::User("private".into())]);
         let second = tool.new_child();
-        assert!(second.messages.is_empty());
-        assert!(Arc::ptr_eq(&tool.model, &first.model));
-        assert!(Arc::ptr_eq(&first.model, &second.model));
+        assert!(second.history().is_empty());
+        assert!(Arc::ptr_eq(&tool.model, first.model_for_test()));
+        assert!(Arc::ptr_eq(first.model_for_test(), second.model_for_test()));
         let names: Vec<String> = second
+            .transcript_context()
             .tools
-            .schemas()
             .iter()
             .map(|s| s["name"].as_str().unwrap().to_string())
             .collect();
@@ -117,33 +115,35 @@ mod tests {
         let mut tool = sub_agent();
         tool.skills = Arc::new(SkillRegistry::scan(root.path()).unwrap());
         let mut first = tool.new_child();
-        assert!(Arc::ptr_eq(&tool.skills, &first.tools.skills));
         assert!(
             first
-                .system_prompt()
+                .system_prompt_for_test()
                 .contains("ownership: Explain Rust ownership.")
         );
         assert!(
             !first
-                .system_prompt()
+                .system_prompt_for_test()
                 .contains("Secret ownership instructions.")
         );
         let (content, error) = first
-            .tools
+            .tools_for_test()
             .execute("load_skill", &json!({"name": "ownership"}))
             .await;
         assert!(!error);
         assert!(content.contains("Secret ownership instructions."));
-        first.messages.push(crate::model::Message::User(content));
+        first = first.with_history(vec![crate::model::Message::User(content)]);
         let second = tool.new_child();
-        assert!(second.messages.is_empty());
-        assert_eq!(first.system_prompt(), second.system_prompt());
+        assert!(second.history().is_empty());
+        assert_eq!(
+            first.system_prompt_for_test(),
+            second.system_prompt_for_test()
+        );
 
         let mut parent = ToolRegistry::with_skills(Arc::clone(&tool.skills));
         parent.enable_sub_agent(Arc::clone(&tool.model), tool.events.clone());
         assert_eq!(
             parent.skill_descriptions(),
-            second.tools.skill_descriptions()
+            tool.skills.describe_available()
         );
         assert!(
             parent
@@ -159,7 +159,7 @@ mod tests {
         let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         tool.events = events;
         let child = tool.new_child();
-        child.emit(crate::events::EventKind::AssistantText(
+        child.emit_for_test(crate::events::EventKind::AssistantText(
             "Hello".into(),
             None,
         ));
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn closed_frontend_does_not_panic() {
         let child = sub_agent().new_child();
-        child.emit(crate::events::EventKind::ModelStarted);
+        child.emit_for_test(crate::events::EventKind::ModelStarted);
     }
 
     #[tokio::test]

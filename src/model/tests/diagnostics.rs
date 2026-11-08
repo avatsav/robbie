@@ -302,7 +302,7 @@ async fn malformed_blocks_preserve_available_metadata_without_executing_tools() 
             let mut agent = agent(server.model_with_recorder(recorder));
             assert!(agent.run("private prompt").await.is_err());
             assert_eq!(
-                agent.messages.len(),
+                agent.history().len(),
                 1,
                 "only the submitted user message survives"
             );
@@ -545,13 +545,12 @@ async fn recorder_failure_does_not_fail_or_replay_tool_execution() {
         Reply::Http(200, "", SUCCESS),
     ]);
     let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut agent = Agent {
-        model: server.model_with_recorder(recorder.clone()),
-        tools: ToolRegistry::new(),
+    let mut agent = Agent::new(
+        server.model_with_recorder(recorder.clone()),
+        ToolRegistry::new(),
         events,
-        source: "main",
-        messages: Vec::new(),
-    };
+        "main",
+    );
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), agent.run("do the tool"))
             .await
@@ -967,13 +966,11 @@ async fn real_children_use_the_same_journal_but_distinct_requests_and_source() {
         Reply::Http(200, "", SUCCESS),
     ]);
     let mut parent = agent(server.model_with_recorder(recorder));
-    parent
-        .tools
-        .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+    parent.enable_sub_agent();
     parent.run("private parent task").await.unwrap();
     assert!(
         !parent
-            .tools
+            .tools_for_test()
             .execute("sub_agent", &json!({"prompt": "private child task"}))
             .await
             .1

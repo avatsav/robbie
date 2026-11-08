@@ -330,7 +330,7 @@ async fn run_app(
     receiver: &mut UnboundedReceiver<AgentEvent>,
     recorder: &Recorder,
 ) -> Result<()> {
-    let mut app = App::new(agent.model.model_name());
+    let mut app = App::new(agent.model_name());
     app.recorder = Some(recorder.clone());
     if let Some(warning) = recorder.take_warning() {
         app.content.notice(format!("[warning] {warning}"));
@@ -350,7 +350,7 @@ async fn run_app(
         }
         let prompt = app.content.submit();
         app.scroll_back = 0;
-        let turn = agent.model.agent_turn(agent.source, None);
+        let turn = agent.prepare_turn(None);
         app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
         match run_turn(
             terminal,

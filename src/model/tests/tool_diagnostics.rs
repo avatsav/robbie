@@ -102,9 +102,7 @@ async fn delegation_links_child_turn_to_parent_request_and_execution_even_when_c
         replies.push(Reply::Http(200, "", SUCCESS));
         let server = Server::new(replies);
         let mut parent = agent(server.model_with_recorder(recorder));
-        parent
-            .tools
-            .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+        parent.enable_sub_agent();
         assert_eq!(parent.run("private parent task").await.unwrap(), "done");
         let records = log(root.path());
         let turns = events(&records, "agent_turn_started");
@@ -173,9 +171,7 @@ async fn invalid_delegation_reports_a_tool_error_without_starting_a_child() {
         Reply::Http(200, "", SUCCESS),
     ]);
     let mut parent = agent(server.model_with_recorder(recorder));
-    parent
-        .tools
-        .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+    parent.enable_sub_agent();
     assert_eq!(parent.run("private task").await.unwrap(), "done");
     let records = log(root.path());
     assert_eq!(events(&records, "agent_turn_started").len(), 1);
@@ -203,9 +199,7 @@ async fn dropped_delegation_is_abandoned_with_unknown_outcome_not_a_fabricated_t
             Reply::Stall,
         ]);
         let mut parent = agent(server.model_with_recorder(recorder));
-        parent
-            .tools
-            .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+        parent.enable_sub_agent();
         let mut run = Box::pin(parent.run("private parent task"));
         tokio::select! {
             result = run.as_mut() => panic!("unexpected completion: {result:?}"),

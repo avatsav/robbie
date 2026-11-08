@@ -629,13 +629,12 @@ pub(crate) mod tests {
                 Reply::Http(200, "", SUCCESS),
             ]);
             let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut agent = Agent {
-                model: server.model_with_prompt_cache(prompt_cache),
-                tools: ToolRegistry::new(),
+            let mut agent = Agent::new(
+                server.model_with_prompt_cache(prompt_cache),
+                ToolRegistry::new(),
                 events,
-                source: "main",
-                messages: Vec::new(),
-            };
+                "main",
+            );
             let text = tokio::time::timeout(
                 Duration::from_secs(10),
                 agent.run("use the tool then reply"),
@@ -644,8 +643,8 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(text, "done");
-            assert_eq!(agent.messages.len(), 4);
-            let Message::ToolResults(results) = &agent.messages[2] else {
+            assert_eq!(agent.history().len(), 4);
+            let Message::ToolResults(results) = &agent.history()[2] else {
                 panic!("expected tool results");
             };
             assert_eq!(results.len(), 1);
@@ -689,7 +688,7 @@ pub(crate) mod tests {
             assert_prompt_cache_anchors(&body, prompt_cache);
             // Generated markers never enter the agent's durable user/tool history.
             assert!(
-                matches!(&agent.messages[0], Message::User(text) if text == "use the tool then reply")
+                matches!(&agent.history()[0], Message::User(text) if text == "use the tool then reply")
             );
         }
     }
@@ -708,20 +707,17 @@ pub(crate) mod tests {
                 Reply::Http(200, "", SUCCESS),
             ]);
             let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut parent = Agent {
-                model: server.model_with_prompt_cache(prompt_cache),
-                tools: ToolRegistry::new(),
+            let mut parent = Agent::new(
+                server.model_with_prompt_cache(prompt_cache),
+                ToolRegistry::new(),
                 events,
-                source: "main",
-                messages: Vec::new(),
-            };
-            parent
-                .tools
-                .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+                "main",
+            );
+            parent.enable_sub_agent();
             assert_eq!(parent.run("parent-only-secret").await.unwrap(), "done");
             let (text, is_error) = tokio::time::timeout(
                 Duration::from_secs(10),
-                parent.tools.execute(
+                parent.tools_for_test().execute(
                     "sub_agent",
                     &serde_json::json!({"prompt": "child-only-task"}),
                 ),
@@ -730,7 +726,7 @@ pub(crate) mod tests {
             .unwrap();
             assert!(!is_error, "{text}");
             assert_eq!(text, "done");
-            assert_eq!(parent.messages.len(), 2);
+            assert_eq!(parent.history().len(), 2);
             let mut child_tool_calls = 0;
             while let Ok(event) = receiver.try_recv() {
                 if matches!(event.kind, EventKind::ToolStarted { .. }) {
@@ -795,13 +791,7 @@ pub(crate) mod tests {
             r#"{"content":[{"type":"tool_use","id":"valid","name":"bash","input":{"command":"printf should-not-run"}},{"type":"tool_use","name":"bash","input":{}}]}"#,
         )]);
         let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let mut agent = Agent {
-            model: server.model(),
-            tools: ToolRegistry::new(),
-            events,
-            source: "main",
-            messages: Vec::new(),
-        };
+        let mut agent = Agent::new(server.model(), ToolRegistry::new(), events, "main");
         assert!(
             agent
                 .run("test malformed response")
@@ -811,7 +801,7 @@ pub(crate) mod tests {
                 .contains("no ID")
         );
         assert_eq!(server.count(), 1);
-        assert_eq!(agent.messages.len(), 1);
+        assert_eq!(agent.history().len(), 1);
         while let Ok(event) = receiver.try_recv() {
             assert!(!matches!(event.kind, EventKind::ToolStarted { .. }));
         }
@@ -834,19 +824,13 @@ pub(crate) mod tests {
         ] {
             let server = Server::new(vec![Reply::Http(200, "", body)]);
             let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut agent = Agent {
-                model: server.model(),
-                tools: ToolRegistry::new(),
-                events,
-                source: "main",
-                messages: Vec::new(),
-            };
+            let mut agent = Agent::new(server.model(), ToolRegistry::new(), events, "main");
             assert!(
                 agent.run("malformed blocks").await.is_err(),
                 "accepted {body}"
             );
             assert_eq!(server.count(), 1);
-            assert_eq!(agent.messages.len(), 1);
+            assert_eq!(agent.history().len(), 1);
             while let Ok(event) = receiver.try_recv() {
                 assert!(!matches!(event.kind, EventKind::ToolStarted { .. }));
             }

@@ -7,13 +7,7 @@ use serde_json::json;
 pub(super) fn agent(model: Arc<ModelClient>) -> Agent {
     // Intentionally closed: handled text must not be mistaken for UI receipt.
     let (events, _) = tokio::sync::mpsc::unbounded_channel();
-    Agent {
-        model,
-        tools: ToolRegistry::new(),
-        events,
-        source: "main",
-        messages: Vec::new(),
-    }
+    Agent::new(model, ToolRegistry::new(), events, "main")
 }
 
 #[tokio::test]
@@ -279,9 +273,7 @@ async fn nested_child_turn_does_not_replace_the_parents_request_context_or_total
         Reply::Http(200, "", SUCCESS),
     ]);
     let mut parent = agent(server.model_with_recorder(recorder));
-    parent
-        .tools
-        .enable_sub_agent(Arc::clone(&parent.model), parent.events.clone());
+    parent.enable_sub_agent();
     assert_eq!(parent.run("private parent task").await.unwrap(), "done");
     let records = log(root.path());
     let turns = events(&records, "agent_turn_started");
