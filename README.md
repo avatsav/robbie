@@ -4,4 +4,4 @@
 
 Robbie is a tiny AI agent.
 
-[Development](docs/DEVELOPMENT.md)
+[Development](docs/development.md)

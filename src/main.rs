@@ -183,6 +183,8 @@ fn run_with_runtime(future: impl std::future::Future<Output = Result<()>>) -> Re
 
 async fn run() -> Result<()> {
     dotenvy::dotenv().ok();
+    let prompt_cache =
+        model::PromptCache::from_setting(std::env::var_os("ROBBIE_PROMPT_CACHE").as_deref())?;
     let skills_directory = std::env::current_dir()?.join("skills");
     let skills = Arc::new(
         tokio::task::spawn_blocking(move || skills::SkillRegistry::scan(&skills_directory))
@@ -197,13 +199,16 @@ async fn run() -> Result<()> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let recorder = diagnostics::Recorder::start(&model_name);
-    let model = Arc::new(ModelClient::new(
-        model::client()?,
-        OpenRouter::new(api_key, upstream),
-        AnthropicMessages,
-        model_name,
-        recorder.clone(),
-    ));
+    let model = Arc::new(
+        ModelClient::new(
+            model::client()?,
+            OpenRouter::new(api_key, upstream),
+            AnthropicMessages,
+            model_name,
+            recorder.clone(),
+        )
+        .with_prompt_cache(prompt_cache),
+    );
     let mut agent = Agent {
         model,
         tools: ToolRegistry::with_skills(skills),

@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robbie · A conversation with cache checkpoints</title>
+<style>
+  :root { color-scheme: light; font: 15px/1.5 system-ui, sans-serif; color: #233029; background: #f6f7f5; }
+  * { box-sizing: border-box; }
+  body { max-width: 1180px; margin: auto; padding: 30px 20px; }
+  h1 { font-size: 29px; letter-spacing: -.6px; margin: 0 0 8px; }
+  h2 { font-size: 18px; margin: 0; }
+  h3 { font-size: 15px; margin: 0 0 5px; }
+  p { margin: 7px 0; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+  .muted, small { color: #647067; }
+  .intro { max-width: 850px; }
+  .key { margin: 18px 0; padding: 13px 17px; background: #e8f2eb; border-left: 4px solid #29724b; }
+  .toolbar, .legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .toolbar { margin: 18px 0 12px; }
+  button { font: inherit; font-size: 13px; padding: 8px 12px; border: 1px solid #bdc9bf; border-radius: 6px; background: white; color: inherit; cursor: pointer; }
+  button:hover { background: #eff4ef; }
+  button:focus-visible, summary:focus-visible { outline: 3px solid #29724b; outline-offset: 3px; }
+  button[aria-pressed="true"] { background: #29724b; color: white; border-color: #29724b; }
+  .legend { font-size: 12px; margin: 12px 0 20px; gap: 18px; }
+  .swatch { display: inline-block; width: 13px; height: 13px; border: 1px solid #aac3db; background: #edf4fb; vertical-align: -2px; margin-right: 5px; }
+  .swatch.new { background: white; border-color: #d5dcd6; }
+  .columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 22px; align-items: start; }
+  .column { min-width: 0; background: white; border: 1px solid #d7dfd8; border-radius: 12px; padding: 18px; }
+  .column-heading { min-height: 86px; border-bottom: 1px solid #e4e9e4; margin-bottom: 16px; }
+  .eyebrow { font-size: 11px; letter-spacing: 1px; font-weight: 700; color: #647067; }
+  .thread { display: grid; gap: 13px; }
+  .message { border: 1px solid #d7dfd8; border-radius: 9px; overflow: hidden; }
+  .message.user { margin-left: 28px; }
+  .message.assistant { margin-right: 28px; }
+  .message.setup { font-size: 13px; }
+  .message-heading { padding: 7px 11px; background: #f4f6f3; border-bottom: 1px solid #e1e7e1; font-weight: 650; font-size: 12px; }
+  .part { padding: 10px 11px; border-bottom: 1px solid #e5eae5; }
+  .part:last-child { border-bottom: 0; }
+  .part.shared { background: #edf4fb; }
+  .part.in-prefix { box-shadow: inset 4px 0 #68a17c; }
+  .part.selected { box-shadow: inset 4px 0 #29724b; outline: 2px solid #29724b; outline-offset: -2px; }
+  .part.previous { background: #f5f7f5; }
+  .part p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .part-label { font-size: 11px; color: #647067; display: block; margin-bottom: 4px; }
+  .marker { display: inline-block; margin-top: 9px; padding: 4px 8px; border: 1px solid #91b79c; border-radius: 5px; color: #215f3b; background: #e5f1e8; font-size: 11px; font-weight: 700; }
+  .marker.old { color: #56675b; background: #e9ede9; border-color: #c0cbc2; }
+  .unmarked { display: block; font-size: 11px; color: #6b766d; margin-top: 7px; }
+  .boundary { border-top: 2px dashed #8dabc7; margin: 12px 2px 2px; padding-top: 6px; font-size: 11px; color: #466787; }
+  .generated { text-align: center; margin-top: 16px; font-size: 12px; color: #647067; }
+  .why { margin: 20px 0; padding: 17px 19px; border: 1px solid #c8d9cc; border-radius: 9px; background: #f0f6f1; }
+  .why p { margin: 4px 0; }
+  .reasons { display: grid; grid-template-columns: repeat(3,1fr); gap: 15px; margin-top: 18px; }
+  .reason { background: white; padding: 14px; border: 1px solid #d7dfd8; border-radius: 8px; font-size: 13px; }
+  details { margin-top: 20px; }
+  summary { cursor: pointer; font-weight: 650; }
+  pre { background: white; border: 1px solid #d7dfd8; border-radius: 8px; padding: 14px; max-height: 440px; overflow: auto; }
+  footer { margin-top: 18px; font-size: 12px; color: #647067; }
+  @media (max-width: 760px) { .columns, .reasons { grid-template-columns: 1fr; } body { padding: 20px 12px; } .column-heading { min-height: 0; padding-bottom: 12px; } }
+</style>
+</head>
+<body>
+<header class="intro">
+  <div class="eyebrow">EXPLANATORY PROTOTYPE · SAMPLE CONVERSATION</div>
+  <h1>A marker is a checkpoint, not a message filter.</h1>
+  <p>Each model request sends the <strong>whole conversation so far</strong>. A marker says: “cache everything from the start through here.”</p>
+</header>
+<div class="key"><strong>The messages in between are included.</strong> They do not each need their own marker. Assistant replies become input on the next request, and a later marker covers them too.</div>
+<nav id="steps" class="toolbar" aria-label="Conversation steps"></nav>
+<p id="step-description" class="muted" aria-live="polite"></p>
+<div class="legend">
+  <span><i class="swatch"></i>Same input content as the previous request: potentially reusable</span>
+  <span><i class="swatch new"></i>New input in this request</span>
+  <span><strong style="color:#29724b">Green left edge:</strong> inside the selected marker’s prefix</span>
+</div>
+<main class="columns">
+  <section class="column">
+    <header class="column-heading"><div class="eyebrow">PREVIOUS REQUEST</div><h2 id="previous-title"></h2><p class="muted">These are the markers we sent then.</p></header>
+    <div class="thread" id="previous-thread"></div>
+  </section>
+  <section class="column">
+    <header class="column-heading"><div class="eyebrow">CURRENT REQUEST</div><h2 id="current-title"></h2><p class="muted">All messages below are sent together. Click a green marker.</p></header>
+    <div class="thread" id="current-thread"></div>
+    <div class="generated">↓ The model now generates a new assistant reply.<br>That reply is not part of this request’s input.</div>
+  </section>
+</main>
+<section class="why" aria-live="polite">
+  <h3 id="selection-title"></h3><p id="selection-reason"></p>
+  <button id="whole-prefix">Highlight the whole conversation prefix</button>
+</section>
+<section class="reasons">
+  <article class="reason"><h3>Why the last message?</h3>Its checkpoint covers <strong>every earlier message</strong>. Marking each one would be redundant for covering this request’s full prefix.</article>
+  <article class="reason"><h3>Why tools and system too?</h3>They give the stable setup its own checkpoints, even when the task/history changes. With no earlier setup checkpoint, unchanged setup alone does not guarantee reuse.</article>
+  <article class="reason"><h3>Why not every message?</h3>The API allows four explicit checkpoints. We normally use three. It is not a rule that assistant text is less cacheable.</article>
+</section>
+<details><summary>See the current request’s JSON</summary><pre id="json"></pre></details>
+<footer>Blue means shared input, not a confirmed cache hit. Reuse requires an available matching cache entry and provider support. This illustration assumes the same setup/provider and sufficient prefix length. No model calls, real data, or persistence. Generated marker: <code>"cache_control": {"type":"ephemeral"}</code>.</footer>
+<script>
+// Synthetic conversation and fresh request construction. No DOM in these functions.
+const tools = [
+  {name:'bash', description:'Run a shell command', input_schema:{type:'object',properties:{command:{type:'string'}}}},
+  {name:'read_file', description:'Read a workspace file', input_schema:{type:'object',properties:{path:{type:'string'}}}}
+];
+const conversation = [
+  {role:'user', content:'What is this project?'},
+  {role:'assistant', content:[{type:'text',text:'It is Robbie, a terminal coding agent written in Rust.'}]},
+  {role:'user', content:'Read Cargo.toml and README.md. Which libraries does it use?'},
+  {role:'assistant', content:[
+    {type:'text',text:'I’ll read both files.'},
+    {type:'tool_use',id:'cargo',name:'read_file',input:{path:'Cargo.toml'}},
+    {type:'tool_use',id:'readme',name:'read_file',input:{path:'README.md'}}
+  ]},
+  {role:'user', content:[
+    {type:'tool_result',tool_use_id:'cargo',content:'[dependencies]\ntokio = "1"\nreqwest = "0.13"\nratatui = "0.30"',is_error:false},
+    {type:'tool_result',tool_use_id:'readme',content:'# Robbie\nA terminal coding agent.',is_error:false}
+  ]},
+  {role:'assistant', content:[{type:'text',text:'It uses Tokio for async work, Reqwest for HTTP, and Ratatui for the terminal UI.'}]},
+  {role:'user', content:'Why does it need Tokio?'}
+];
+const steps = [
+  {label:'1. First question', count:1, description:'There is no earlier request yet. The final user message gets the conversation checkpoint.'},
+  {label:'2. Follow-up', count:3, description:'Compare the first user message: it had a marker before, but has no marker now. It is still inside the new, longer prefix.'},
+  {label:'3. Tool results', count:5, description:'The assistant’s tool calls and both results are included. Only the last result needs the new conversation marker.'},
+  {label:'4. Another question', count:7, description:'The entire tool exchange is now shared input. The new assistant answer and user question extend the prefix.'}
+];
+function requestAt(index) {
+  const body = structuredClone({model:'example/model',max_tokens:8000,tools,
+    system:'You are a coding assistant. Inspect the workspace and answer clearly.',
+    messages:conversation.slice(0,steps[index].count)});
+  body.tools.at(-1).cache_control = {type:'ephemeral'};
+  body.system = [{type:'text',text:body.system,cache_control:{type:'ephemeral'}}];
+  const last = body.messages.at(-1);
+  if (typeof last.content === 'string') last.content = [{type:'text',text:last.content}];
+  last.content.at(-1).cache_control = {type:'ephemeral'};
+  return body;
+}
+function groupsFor(body) {
+  const groups = [{role:'setup',title:'Tool definitions · setup, not a chat message',parts:body.tools.map(tool => ({
+    text:tool.name + (tool.name === 'read_file' ? '(path)' : '(command)'),marker:tool.cache_control,kind:'tools'
+  }))}, {role:'setup',title:'System · setup instructions',parts:body.system.map(block => ({text:block.text,marker:block.cache_control,kind:'system'}))}];
+  body.messages.forEach(message => {
+    const blocks = typeof message.content === 'string' ? [{type:'text',text:message.content}] : message.content;
+    const isResults = blocks.some(block => block.type === 'tool_result');
+    groups.push({role:isResults ? 'tool' : message.role,
+      title:isResults ? 'Tool results · one user-role message on the wire' : message.role === 'user' ? 'You' : 'Assistant',
+      parts:blocks.map(block => ({
+        text:block.type === 'tool_use' ? 'Calls ' + block.name + '(' + JSON.stringify(block.input) + ')'
+          : block.type === 'tool_result' ? block.content : block.text,
+        label:block.type === 'tool_result' ? 'Result: ' + (block.tool_use_id === 'cargo' ? 'Cargo.toml' : 'README.md') : '',
+        marker:block.cache_control,kind:'conversation'
+      }))});
+  });
+  let index = 0;
+  groups.forEach(group => group.parts.forEach(part => { part.index = index++; }));
+  return groups;
+}
+
+// View only. Text nodes keep the demo data separate from HTML.
+const $ = id => document.getElementById(id);
+function node(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+let step = 1;
+let selected = null;
+function renderThread(target, groups, previous, sharedEnd) {
+  const messages = groups.map(group => {
+    const card = node('article','message ' + group.role);
+    card.append(node('div','message-heading',group.title));
+    group.parts.forEach(part => {
+      const area = node('div','part');
+      if (previous) area.classList.add('previous');
+      else {
+        area.classList.toggle('shared',part.index <= sharedEnd);
+        area.classList.toggle('in-prefix',part.index <= selected);
+        area.classList.toggle('selected',part.index === selected);
+      }
+      if (part.label) area.append(node('span','part-label',part.label));
+      area.append(node('p','',part.text));
+      if (part.marker) {
+        const label = part.kind === 'conversation' ? 'MARKER · everything through here'
+          : part.kind === 'tools' ? 'MARKER · tools through here' : 'MARKER · tools + system through here';
+        const badge = node(previous ? 'span' : 'button','marker' + (previous ? ' old' : ''),label);
+        if (!previous) {
+          badge.dataset.marker = part.index;
+          badge.setAttribute('aria-pressed',part.index === selected);
+        }
+        area.append(badge);
+      } else {
+        area.append(node('span','unmarked',previous ? 'No marker on this block' : 'No marker here · still inside the final prefix'));
+      }
+      card.append(area);
+      if (!previous && sharedEnd >= 0 && part.index === sharedEnd) {
+        card.append(node('div','boundary','Previous request’s conversation checkpoint ended here. Everything below is new input.'));
+      }
+    });
+    return card;
+  });
+  target.replaceChildren(...messages);
+}
+function render(resetSelection = false) {
+  const current = requestAt(step);
+  const groups = groupsFor(current);
+  const parts = groups.flatMap(group => group.parts);
+  const previous = step > 0 ? requestAt(step - 1) : null;
+  const previousGroups = previous ? groupsFor(previous) : [];
+  const sharedEnd = previousGroups.flatMap(group => group.parts).length - 1;
+  if (resetSelection || selected === null) selected = parts.at(-1).index;
+  $('steps').replaceChildren(...steps.map((item,index) => {
+    const button = node('button','',item.label);
+    button.dataset.step = index;
+    button.setAttribute('aria-pressed',index === step);
+    return button;
+  }));
+  $('step-description').textContent = steps[step].description;
+  $('previous-title').textContent = step > 0 ? 'Request ' + step : 'No previous request';
+  $('current-title').textContent = 'Request ' + (step + 1) + ' · all input sent now';
+  if (previous) renderThread($('previous-thread'),previousGroups,true,-1);
+  else $('previous-thread').replaceChildren(node('p','muted','Start here, or choose “2. Follow-up” to compare two requests.'));
+  renderThread($('current-thread'),groups,false,sharedEnd);
+  const active = parts.find(part => part.index === selected);
+  const explanations = {
+    tools:['Tool checkpoint','Covers both tool definitions. A marker on the last tool already includes the first tool.'],
+    system:['System checkpoint','Covers the tool definitions and system instructions. This anchors stable setup separately from the conversation.'],
+    conversation:['Conversation checkpoint: every message above is included','User messages, assistant replies, tool calls and tool results are all inside this prefix—even those without a marker. One checkpoint covers them together.']
+  };
+  $('selection-title').textContent = explanations[active.kind][0];
+  $('selection-reason').textContent = explanations[active.kind][1];
+  $('json').textContent = JSON.stringify(current,null,2);
+}
+$('steps').addEventListener('click',event => {
+  const button = event.target.closest('[data-step]');
+  if (!button) return;
+  step = Number(button.dataset.step);
+  render(true);
+});
+$('current-thread').addEventListener('click',event => {
+  const button = event.target.closest('[data-marker]');
+  if (!button) return;
+  selected = Number(button.dataset.marker);
+  render();
+});
+$('whole-prefix').addEventListener('click',() => render(true));
+render(true);
+</script>
+</body>
+</html>

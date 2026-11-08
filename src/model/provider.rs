@@ -68,7 +68,7 @@ impl Provider for OpenRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AnthropicMessages, Message, Protocol};
+    use crate::model::{AnthropicMessages, Message, PromptCache, Protocol};
     use serde_json::Value;
 
     #[test]
@@ -79,6 +79,7 @@ mod tests {
             "instructions",
             &[Message::User("hi".into())],
             &[],
+            PromptCache::Short,
         );
         let request = OpenRouter::new("test-key".into(), Some("test-upstream".into()))
             .prepare(&http, encoded)
@@ -98,7 +99,11 @@ mod tests {
             serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
         assert_eq!(body["model"], "test/model");
         assert_eq!(body["provider"], json!({"only": ["test-upstream"]}));
-        assert_eq!(body["messages"][0]["content"], "hi");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hi");
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
     }
 
     #[test]
@@ -127,7 +132,7 @@ mod tests {
 
     #[test]
     fn absent_upstream_does_not_invent_a_routing_restriction() {
-        let encoded = AnthropicMessages.encode("test", "", &[], &[]);
+        let encoded = AnthropicMessages.encode("test", "", &[], &[], PromptCache::Short);
         let original = encoded.body.clone();
         let request = OpenRouter::new("test".into(), None)
             .prepare(&Client::new(), encoded)

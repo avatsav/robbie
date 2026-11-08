@@ -4,7 +4,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
 use super::metadata::{BlockCounts, ResponseMetadata, StopReason, TokenUsage};
-use super::{Message, Output, Reply, ToolCall};
+use super::{Message, Output, PromptCache, Reply, ToolCall};
 
 pub struct EncodedRequest {
     pub path: &'static str,
@@ -19,6 +19,7 @@ pub trait Protocol {
         system: &str,
         messages: &[Message],
         tools: &[Value],
+        prompt_cache: PromptCache,
     ) -> EncodedRequest;
 
     // Inspection is infallible and does not establish reply validity.
@@ -36,6 +37,7 @@ impl Protocol for AnthropicMessages {
         system: &str,
         messages: &[Message],
         tools: &[Value],
+        prompt_cache: PromptCache,
     ) -> EncodedRequest {
         let messages: Vec<Value> = messages
             .iter()
@@ -63,18 +65,22 @@ impl Protocol for AnthropicMessages {
             .collect();
         let mut headers = HeaderMap::new();
         headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+        let mut body = json!({
+            "model": model,
+            "max_tokens": 8000,
+            "system": system,
+            "messages": messages,
+            // Existing tool declarations use name/description/input_schema.
+            // A later protocol can translate them to its own tool format.
+            "tools": tools,
+        });
+        if prompt_cache == PromptCache::Short {
+            apply_prompt_cache(&mut body);
+        }
         EncodedRequest {
             path: "/messages",
             headers,
-            body: json!({
-                "model": model,
-                "max_tokens": 8000,
-                "system": system,
-                "messages": messages,
-                // Existing tool declarations use name/description/input_schema.
-                // A later protocol can translate them to its own tool format.
-                "tools": tools,
-            }),
+            body,
         }
     }
 
@@ -169,6 +175,80 @@ impl Protocol for AnthropicMessages {
     }
 }
 
+// Pi-style explicit anchors. Only this fresh wire value is changed; borrowed
+// schemas and opaque assistant continuation remain untouched. Cache lifetime is
+// the provider's default; no ttl field, model-name gate or root breakpoint.
+fn apply_prompt_cache(body: &mut Value) {
+    // Count only actual wire blocks, not a coincidental cache_control key inside
+    // tool arguments/results. Existing controls remain unchanged.
+    let tools = body["tools"].as_array().into_iter().flatten();
+    let content = body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|message| message["content"].as_array().into_iter().flatten());
+    let existing = tools
+        .chain(content)
+        .filter(|block| block.get("cache_control").is_some())
+        .count();
+    let mut slots = 4usize.saturating_sub(existing);
+
+    if let Some(tool) = body["tools"]
+        .as_array_mut()
+        .and_then(|tools| tools.last_mut())
+    {
+        mark_cache_block(tool, &mut slots);
+    }
+    if slots > 0
+        && let Some(system) = body["system"].as_str().filter(|text| !text.is_empty())
+    {
+        body["system"] =
+            json!([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]);
+        slots -= 1;
+    }
+    // Match Pi's Messages path: inspect only the final user/system message,
+    // never scan backward through or add markers to assistant continuation.
+    let Some(last) = body["messages"]
+        .as_array_mut()
+        .and_then(|messages| messages.last_mut())
+    else {
+        return;
+    };
+    if !matches!(last["role"].as_str(), Some("user" | "system")) {
+        return;
+    }
+    match &mut last["content"] {
+        Value::String(text) if slots > 0 && !text.is_empty() => {
+            last["content"] =
+                json!([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]);
+        }
+        Value::Array(blocks) => {
+            if let Some(block) = blocks.last_mut()
+                && matches!(
+                    block["type"].as_str(),
+                    Some("text" | "image" | "tool_result" | "tool_addition" | "tool_removal")
+                )
+            {
+                mark_cache_block(block, &mut slots);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mark_cache_block(block: &mut Value, slots: &mut usize) {
+    if *slots > 0
+        && let Some(fields) = block.as_object_mut()
+        && !fields.contains_key("cache_control")
+    {
+        fields.insert("cache_control".into(), json!({"type": "ephemeral"}));
+        *slots -= 1;
+    }
+}
+
+#[cfg(test)]
+mod prompt_cache_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,7 +283,13 @@ mod tests {
             })
         );
         assert!(!metadata.to_string().contains("secret"));
-        let encoded = AnthropicMessages.encode("test", "", &[Message::Assistant(reply)], &[]);
+        let encoded = AnthropicMessages.encode(
+            "test",
+            "",
+            &[Message::Assistant(reply)],
+            &[],
+            PromptCache::Short,
+        );
         assert_eq!(encoded.body["messages"][0]["content"], body["content"]);
     }
 
@@ -239,6 +325,7 @@ mod tests {
             "instructions",
             &[Message::User("hello".into())],
             &tools,
+            PromptCache::Short,
         );
         assert_eq!(encoded.path, "/messages");
         assert_eq!(encoded.headers["anthropic-version"], "2023-06-01");
@@ -247,10 +334,45 @@ mod tests {
         assert_eq!(
             encoded.body,
             json!({
-                "model": "test/model", "max_tokens": 8000, "system": "instructions",
-                "messages": [{"role": "user", "content": "hello"}], "tools": tools,
+                "model": "test/model", "max_tokens": 8000,
+                "system": [{"type": "text", "text": "instructions", "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
+                ]}],
+                "tools": [{"name": "read_file", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}],
             })
         );
+    }
+
+    #[test]
+    fn prompt_cache_is_not_gated_by_model_name() {
+        for model in [
+            "anthropic/claude-haiku-5.5",
+            "anthropic/claude-sonnet-5",
+            "deepseek/test",
+            "unknown",
+        ] {
+            let body = AnthropicMessages
+                .encode(
+                    model,
+                    "system",
+                    &[Message::User("hello".into())],
+                    &[],
+                    PromptCache::Short,
+                )
+                .body;
+            assert_eq!(
+                body["system"][0]["cache_control"],
+                json!({"type": "ephemeral"}),
+                "{model}"
+            );
+            assert_eq!(
+                body["messages"][0]["content"][0]["cache_control"],
+                json!({"type": "ephemeral"}),
+                "{model}"
+            );
+            assert!(body.get("cache_control").is_none());
+        }
     }
 
     #[test]
@@ -273,7 +395,13 @@ mod tests {
         assert_eq!(call.id, "call-1");
         assert_eq!(call.name, "read_file");
         assert_eq!(call.arguments, json!({"path": "Cargo.toml"}));
-        let encoded = AnthropicMessages.encode("test", "", &[Message::Assistant(reply)], &[]);
+        let encoded = AnthropicMessages.encode(
+            "test",
+            "",
+            &[Message::Assistant(reply)],
+            &[],
+            PromptCache::Short,
+        );
         assert_eq!(encoded.body["messages"][0]["content"], blocks);
     }
 
@@ -295,12 +423,13 @@ mod tests {
                 },
             ])],
             &[],
+            PromptCache::Short,
         );
         assert_eq!(
             encoded.body["messages"],
             json!([{"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "a", "content": "done", "is_error": false},
-                {"type": "tool_result", "tool_use_id": "b", "content": "denied", "is_error": true},
+                {"type": "tool_result", "tool_use_id": "b", "content": "denied", "is_error": true, "cache_control": {"type": "ephemeral"}},
             ]}])
         );
     }
