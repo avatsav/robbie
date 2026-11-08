@@ -1,17 +1,13 @@
-//! Shared loopback HTTP and journal fixtures. Compiled only for unit tests.
+//! Loopback HTTP server and model-client fixtures; never calls a real provider.
 use crate::{
-    Agent, ToolRegistry,
     diagnostics::Recorder,
     model::{self, AnthropicMessages, ModelClient, OpenRouter, PromptCache},
 };
 use reqwest::RequestBuilder;
-use serde_json::Value;
 use std::{
     collections::VecDeque,
-    fs,
     io::{Read, Write},
     net::TcpListener,
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -197,33 +193,4 @@ impl Drop for Server {
         self.stop.store(true, Ordering::SeqCst);
         self.worker.take().unwrap().join().unwrap();
     }
-}
-
-#[cfg(unix)]
-pub(crate) fn log(root: &Path) -> Vec<Value> {
-    let paths: Vec<_> = fs::read_dir(root.join("robbie/sessions"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    assert_eq!(paths.len(), 1);
-    fs::read_to_string(&paths[0])
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-#[cfg(unix)]
-pub(crate) fn events<'a>(records: &'a [Value], event: &str) -> Vec<&'a Value> {
-    records
-        .iter()
-        .filter(|record| record["event"] == event)
-        .collect()
-}
-
-#[cfg(unix)]
-pub(crate) fn agent(model: Arc<ModelClient>) -> Agent {
-    // Intentionally closed: handled text must not be mistaken for UI receipt.
-    let (events, _) = tokio::sync::mpsc::unbounded_channel();
-    Agent::new(model, ToolRegistry::new(), events, "main")
 }
