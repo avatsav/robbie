@@ -30,6 +30,6 @@ Frontend ownership matters:
 
 ## Checks and limits
 
-Commands are in [Development](development.md#checks). `cargo test` does not discover Python tests. Python unittest discovery includes `tests/system/`; the terminal driver is invoked explicitly.
+Commands are in [Development](development.md#checks). Use `--workspace` to include both crates; the default member is `robbie-cli`. `cargo test` does not discover Python tests. Python unittest discovery includes `tests/system/`; the terminal driver is invoked explicitly.
 
 The PTY driver retains its known resize/Ctrl+C timeout. Moving it does not fix that issue or establish terminal restoration as passing.

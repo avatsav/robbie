@@ -7,7 +7,14 @@ Install Rust using [rustup](https://rustup.rs), then run from the repository roo
 ```sh
 rustup component add rustfmt clippy
 git config --local core.hooksPath .githooks
+```
+
+## Build
+
+```sh
 cargo build --locked
+cargo build --locked -p robbie-core
+cargo build --locked --workspace --release
 ```
 
 ## Run
