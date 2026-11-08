@@ -1,19 +1,22 @@
 use super::*;
 
 #[test]
-fn state_location_requires_absolute_paths_and_never_uses_workspace() {
-    assert_eq!(
-        state_home(Some(Path::new("/state")), Some(Path::new("/home/me"))).unwrap(),
-        Path::new("/state")
+fn explicit_relative_storage_is_rejected_before_creating_directories() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let relative_state = PathBuf::from(root.path().file_name().unwrap()).join("state");
+    assert!(
+        Journal::open(
+            Config {
+                state: relative_state,
+                transcript: false,
+            },
+            &workspace,
+        )
+        .is_err()
     );
-    for xdg in [None, Some(Path::new("")), Some(Path::new("relative"))] {
-        assert_eq!(
-            state_home(xdg, Some(Path::new("/home/me"))).unwrap(),
-            Path::new("/home/me/.local/state")
-        );
-    }
-    assert!(state_home(None, None).is_err());
-    assert!(state_home(Some(Path::new("relative")), Some(Path::new("relative"))).is_err());
+    assert!(!root.path().join("state").exists());
 }
 
 #[test]

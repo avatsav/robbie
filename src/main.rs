@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -8,14 +8,17 @@ mod events;
 mod fullscreen;
 mod markdown;
 mod model;
+mod session;
 mod skills;
 mod terminal_text;
 #[cfg(test)]
 mod test_support;
 mod tools;
 mod ui;
+#[cfg(test)]
 use agent::Agent;
-use model::{AnthropicMessages, ModelClient, OpenRouter};
+use session::{CapturePolicy, ModelSettings, RecordingSettings, Session, SessionConfig};
+#[cfg(test)]
 use tools::ToolRegistry;
 
 fn validate_args(args: &[String]) -> Result<()> {
@@ -46,46 +49,62 @@ fn run_with_runtime(future: impl std::future::Future<Output = Result<()>>) -> Re
 async fn run() -> Result<()> {
     dotenvy::dotenv().ok();
     let prompt_cache =
-        model::PromptCache::from_setting(std::env::var_os("ROBBIE_PROMPT_CACHE").as_deref())?;
+        session::PromptCache::from_setting(std::env::var_os("ROBBIE_PROMPT_CACHE").as_deref())?;
     let workspace = std::env::current_dir()?;
-    let skills_directory = workspace.join("skills");
-    let skills = Arc::new(
-        tokio::task::spawn_blocking(move || skills::SkillRegistry::scan(&skills_directory))
-            .await
-            .context("skill scanning task failed")??,
-    );
-    let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
     let api_key = std::env::var("OPENROUTER_API_KEY").context("OPENROUTER_API_KEY is not set")?;
     let model_name = std::env::var("OPENROUTER_MODEL").context("OPENROUTER_MODEL is not set")?;
     let upstream = std::env::var("OPENROUTER_PROVIDER")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let recorder = diagnostics::Recorder::start(&model_name, &workspace);
-    let model = Arc::new(
-        ModelClient::new(
-            model::client()?,
-            OpenRouter::new(api_key, upstream),
-            AnthropicMessages,
-            model_name,
-            recorder.clone(),
+    let (session, receiver) = Session::new(SessionConfig {
+        workspace: workspace.clone(),
+        skills_directory: workspace.join("skills"),
+        model: ModelSettings {
+            api_key,
+            model: model_name,
+            upstream,
+            prompt_cache,
+        },
+        recording: recording_settings_from_env(),
+    })
+    .await?;
+    fullscreen::run(session, receiver, workspace).await
+}
+
+fn recording_settings_from_env() -> RecordingSettings {
+    RecordingSettings {
+        state_directory: state_home(
+            std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .as_deref(),
+            std::env::var_os("HOME").map(PathBuf::from).as_deref(),
         )
-        .with_prompt_cache(prompt_cache),
-    );
-    let mut agent = Agent::new(
-        model,
-        ToolRegistry::with_skills(skills, workspace.clone()),
-        events,
-        "main",
-    );
-    agent.enable_sub_agent();
-    recorder.session_context(|| agent.transcript_context());
-    fullscreen::run(agent, receiver, recorder, workspace).await
+        .ok(),
+        // Only this exact value opts in; typos must not enable content.
+        capture: if std::env::var_os("ROBBIE_TRANSCRIPT").is_some_and(|value| value == "1") {
+            CapturePolicy::Transcript
+        } else {
+            CapturePolicy::MetadataOnly
+        },
+    }
+}
+
+fn state_home(xdg: Option<&Path>, home: Option<&Path>) -> std::io::Result<PathBuf> {
+    if let Some(path) = xdg.filter(|path| path.is_absolute()) {
+        return Ok(path.to_owned());
+    }
+    home.filter(|path| path.is_absolute())
+        .map(|path| path.join(".local").join("state"))
+        .ok_or_else(|| std::io::Error::other("no absolute state directory available"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    mod configuration;
 
     #[test]
     fn fullscreen_is_the_only_frontend_and_obsolete_flags_are_rejected() {

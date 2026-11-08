@@ -20,12 +20,9 @@ use ratatui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
-    Agent,
-    diagnostics::{
-        Recorder,
-        frontend::{UiEnd, UiTurn},
+    session::{
+        AgentEvent, EventKind, FrontendEnd as UiEnd, FrontendTurn as UiTurn, Recording, Session,
     },
-    events::{AgentEvent, EventKind},
     ui::{self, InputAction, OutputLine},
 };
 
@@ -45,7 +42,7 @@ struct App {
     rendered_rows: Vec<Line<'static>>,
     rendered_width: Option<usize>,
     pending_copy: Option<String>,
-    recorder: Option<Recorder>,
+    recorder: Option<Recording>,
     ui_turn: Option<UiTurn>,
 }
 
@@ -89,7 +86,7 @@ impl App {
     }
 
     fn recording_warning(&mut self) {
-        if let Some(warning) = self.recorder.as_ref().and_then(Recorder::take_warning) {
+        if let Some(warning) = self.recorder.as_ref().and_then(Recording::take_warning) {
             self.content.notice(format!("[warning] {warning}"));
         }
     }
@@ -319,18 +316,18 @@ impl TerminalState {
 }
 
 pub async fn run(
-    mut agent: Agent,
+    mut session: Session,
     mut receiver: UnboundedReceiver<AgentEvent>,
-    recorder: Recorder,
     workspace: PathBuf,
 ) -> Result<()> {
+    let recorder = session.recording();
     let terminal_state = TerminalState::capture();
     let mut terminal = ratatui::init();
     let result = async {
         let _modes = ScreenModes::new()?;
         run_app(
             &mut terminal,
-            &mut agent,
+            &mut session,
             &mut receiver,
             &recorder,
             workspace,
@@ -350,12 +347,12 @@ pub async fn run(
 
 async fn run_app(
     terminal: &mut DefaultTerminal,
-    agent: &mut Agent,
+    session: &mut Session,
     receiver: &mut UnboundedReceiver<AgentEvent>,
-    recorder: &Recorder,
+    recorder: &Recording,
     directory: PathBuf,
 ) -> Result<()> {
-    let mut app = App::new(agent.model_name());
+    let mut app = App::new(session.model_name());
     app.recorder = Some(recorder.clone());
     if let Some(warning) = recorder.take_warning() {
         app.content.notice(format!("[warning] {warning}"));
@@ -375,15 +372,15 @@ async fn run_app(
         }
         let prompt = app.content.submit();
         app.scroll_back = 0;
-        let turn = agent.prepare_turn(None);
-        app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
+        let turn = session.prepare_turn();
+        app.ui_turn = Some(turn.record_frontend(&prompt));
         match run_turn(
             terminal,
             &mut app,
             &mut keys,
             receiver,
             &mut workspace,
-            agent.run_in_turn(prompt.trim(), turn),
+            turn.run(prompt.trim()),
         )
         .await
         {

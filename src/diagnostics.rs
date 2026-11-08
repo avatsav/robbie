@@ -3,7 +3,6 @@
 //! Metadata is an allowlist. Content has a separate, opt-in serialization path;
 //! callers must never supply authentication headers or environment dumps.
 use std::{
-    env,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -85,32 +84,23 @@ struct Record<'a, M> {
     content: Option<Content<'a>>,
 }
 
+#[derive(Clone, Copy, Default)]
+pub enum CapturePolicy {
+    #[default]
+    MetadataOnly,
+    Transcript,
+}
+
+#[derive(Default)]
+pub struct RecordingSettings {
+    /// Resolved absolute state directory. None disables recording with a warning.
+    pub state_directory: Option<PathBuf>,
+    pub capture: CapturePolicy,
+}
+
 struct Config {
     state: PathBuf,
     transcript: bool,
-}
-
-impl Config {
-    fn from_env() -> io::Result<Self> {
-        let root = state_home(
-            env::var_os("XDG_STATE_HOME").map(PathBuf::from).as_deref(),
-            env::var_os("HOME").map(PathBuf::from).as_deref(),
-        )?;
-        Ok(Self {
-            state: root,
-            // Only this exact value opts in; typos must not enable content.
-            transcript: env::var_os("ROBBIE_TRANSCRIPT").is_some_and(|value| value == "1"),
-        })
-    }
-}
-
-fn state_home(xdg: Option<&Path>, home: Option<&Path>) -> io::Result<PathBuf> {
-    if let Some(path) = xdg.filter(|path| path.is_absolute()) {
-        return Ok(path.to_owned());
-    }
-    home.filter(|path| path.is_absolute())
-        .map(|path| path.join(".local").join("state"))
-        .ok_or_else(|| io::Error::other("no absolute state directory available"))
 }
 
 #[derive(Clone)]
@@ -119,9 +109,19 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(model: &str, workspace: &Path) -> Self {
-        let journal = Config::from_env()
-            .and_then(|config| Journal::open(config, workspace))
+    pub fn start(model: &str, workspace: &Path, settings: RecordingSettings) -> Self {
+        let journal = settings
+            .state_directory
+            .ok_or_else(|| io::Error::other("no state directory available"))
+            .and_then(|state| {
+                Journal::open(
+                    Config {
+                        state,
+                        transcript: matches!(settings.capture, CapturePolicy::Transcript),
+                    },
+                    workspace,
+                )
+            })
             .unwrap_or_else(|_| Journal::disabled());
         let recorder = Self {
             journal: Arc::new(Mutex::new(journal)),
@@ -199,7 +199,7 @@ impl Recorder {
                         state: state.to_owned(),
                         transcript,
                     },
-                    &env::current_dir().unwrap(),
+                    &std::env::current_dir().unwrap(),
                 )
                 .unwrap(),
             )),
@@ -259,6 +259,9 @@ impl Journal {
     }
 
     fn open(config: Config, workspace: &Path) -> io::Result<Self> {
+        if !config.state.is_absolute() {
+            return Err(io::Error::other("state directory must be absolute"));
+        }
         // Do not silently offer weaker file protection on unsupported platforms.
         #[cfg(not(unix))]
         return Err(io::Error::other("private diagnostic files require Unix"));

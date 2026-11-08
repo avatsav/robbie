@@ -4,9 +4,15 @@ use super::*;
 #[test]
 fn model_recorder_failure_becomes_one_visible_notice_without_losing_the_draft() {
     let root = tempfile::tempdir().unwrap();
-    let recorder = Recorder::for_test(root.path(), false);
+    let recorder = crate::diagnostics::Recorder::for_test(root.path(), false);
+    let server = crate::test_support::Server::new(vec![]);
+    let (session, _) = Session::for_test(
+        server.model_with_recorder(recorder.clone()),
+        std::env::current_dir().unwrap(),
+        recorder.clone(),
+    );
     let mut app = App::new("test/model");
-    app.recorder = Some(recorder.clone());
+    app.recorder = Some(session.recording());
     app.handle_event(Event::Paste("my next draft".into()));
     recorder.break_writer_for_test();
     drop(recorder.model_request("main", "test/model", &json!({})));

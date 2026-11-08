@@ -10,9 +10,7 @@ async fn sequential_ui_turns_reset_counts_and_text_sequence_without_reusing_turn
         if i == 1 {
             fixture.app.handle_event(Event::Paste(PROMPT.into()));
             let prompt = fixture.app.content.submit();
-            let turn = fixture.agent.prepare_turn(None);
-            fixture.app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
-            fixture.turn = Some(turn);
+            assert_eq!(prompt, PROMPT);
         }
         let result = fixture.run().await;
         fixture.consume(false);
@@ -73,13 +71,9 @@ async fn exhausted_rate_limit_retries_allow_the_next_user_message_to_complete() 
     let mut fixture = Fixture::new(&server, &recorder);
     // A draft typed during the failed turn must survive completion as well.
     fixture.app.handle_event(Event::Paste("next prompt".into()));
-    let turn = fixture.turn.take().unwrap();
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        fixture.agent.run_in_turn(PROMPT, turn),
-    )
-    .await
-    .expect("bounded retries timed out");
+    let result = tokio::time::timeout(Duration::from_secs(15), fixture.run_prompt(PROMPT))
+        .await
+        .expect("bounded retries timed out");
     assert!(format!("{:#}", result.as_ref().unwrap_err()).contains("429"));
     fixture.consume(false);
     assert!(fixture.finish(result).is_none());
@@ -98,14 +92,9 @@ async fn exhausted_rate_limit_retries_allow_the_next_user_message_to_complete() 
     );
     let prompt = fixture.app.content.submit();
     assert_eq!(prompt, "next prompt");
-    let turn = fixture.agent.prepare_turn(None);
-    fixture.app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        fixture.agent.run_in_turn(&prompt, turn),
-    )
-    .await
-    .expect("next turn timed out");
+    let result = tokio::time::timeout(Duration::from_secs(5), fixture.run_prompt(&prompt))
+        .await
+        .expect("next turn timed out");
     fixture.consume(false);
     assert!(fixture.finish(result).is_some());
     assert!(fixture.screen().contains("é猫"));
@@ -126,8 +115,7 @@ async fn prepared_identity_survives_frontend_failure_before_work_is_polled() {
     let recorder = Recorder::for_test(root.path(), false);
     let server = Server::new(vec![]);
     let mut fixture = Fixture::new(&server, &recorder);
-    let turn = fixture.turn.take().unwrap();
-    let run = fixture.agent.run_in_turn(PROMPT, turn);
+    let run = fixture.prepare(PROMPT).run(PROMPT);
     // A draw/input failure can drop the prepared future before its first poll.
     drop(run);
     fixture.app.end_ui_turn(UiEnd::FrontendFailed);

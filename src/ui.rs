@@ -13,9 +13,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    diagnostics::frontend::TextAppend,
-    events::{AgentEvent, EventKind},
     markdown::Markdown,
+    session::{AgentEvent, EventKind, TextAppend},
 };
 
 mod footer;

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolRegistry};
 use crate::skills::SkillRegistry;
-use crate::{Agent, diagnostics::tool::ToolContext};
+use crate::{agent::Agent, diagnostics::tool::ToolContext};
 
 pub(super) struct SubAgent {
     pub(super) model: Arc<crate::model::ModelClient>,

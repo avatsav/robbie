@@ -12,6 +12,8 @@ Frontend ownership matters:
 | --- | --- |
 | `src/ui/tests/` | Draft input, presentation, and tool-output formatting. |
 | `src/agent/tests/` | Agent-turn lifecycle, tool-span outcomes, and delegation causality. |
+| `src/session/tests.rs` | Terminal-independent construction, prepared-turn ownership, and session execution. |
+| `src/tests/configuration.rs` | CLI environment resolution and recording startup; subprocess fixtures isolate environment changes. |
 | `src/fullscreen/tests/` | Frontend orchestration, transcript, selection, and viewport behavior. |
 | `src/fullscreen/tests/diagnostics/` | Frontend receipt/append/completion evidence through the agent/channel path; not proof of visible terminal pixels. |
 | `src/diagnostics/tests/` | Journal storage, privacy, configuration, and failure handling. |

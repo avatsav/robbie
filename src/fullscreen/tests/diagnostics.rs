@@ -2,8 +2,8 @@
 //! We exercise the completion-drain handlers, not terminal input or real pixels.
 use super::*;
 use crate::{
-    ToolRegistry,
-    diagnostics::agent::AgentTurn,
+    diagnostics::Recorder,
+    session::PreparedTurn,
     test_support::{Reply, Server, events, log},
 };
 use ratatui::{Terminal, backend::TestBackend};
@@ -17,10 +17,10 @@ const TOOL: &str = r#"{"stop_reason":"tool_use","content":[{"type":"tool_use","i
 const PREFACE_TOOL: &str = r#"{"stop_reason":"tool_use","content":[{"type":"text","text":"working"},{"type":"tool_use","id":"fixture-call","name":"bash","input":{"command":"printf fixture-output"}}]}"#;
 
 struct Fixture {
-    agent: Agent,
+    session: Session,
     receiver: UnboundedReceiver<AgentEvent>,
     app: App,
-    turn: Option<AgentTurn>,
+    ui_start_fault: Option<Recorder>,
 }
 
 impl Fixture {
@@ -30,33 +30,38 @@ impl Fixture {
 
     fn with_ui_start_fault(server: &Server, recorder: &Recorder, fail: bool) -> Self {
         let model = server.model_with_recorder(recorder.clone());
-        let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let mut tools = ToolRegistry::new();
-        tools.enable_sub_agent(model.clone(), events.clone());
-        let agent = Agent::new(model, tools, events, "main");
+        let (session, receiver) =
+            Session::for_test(model, std::env::current_dir().unwrap(), recorder.clone());
         let mut app = App {
-            recorder: Some(recorder.clone()),
+            recorder: Some(session.recording()),
             ..App::default()
         };
         app.handle_event(Event::Paste(PROMPT.into()));
         let prompt = app.content.submit();
         assert_eq!(prompt, PROMPT);
-        let turn = agent.prepare_turn(None);
-        if fail {
-            recorder.break_writer_for_test();
-        }
-        app.ui_turn = Some(recorder.ui_turn(turn.origin(), &prompt));
         Self {
-            agent,
+            session,
             receiver,
             app,
-            turn: Some(turn),
+            ui_start_fault: fail.then(|| recorder.clone()),
         }
     }
 
+    fn prepare(&mut self, submitted: &str) -> PreparedTurn<'_> {
+        let turn = self.session.prepare_turn();
+        if let Some(recorder) = self.ui_start_fault.take() {
+            recorder.break_writer_for_test();
+        }
+        self.app.ui_turn = Some(turn.record_frontend(submitted));
+        turn
+    }
+
+    async fn run_prompt(&mut self, prompt: &str) -> Result<String> {
+        self.prepare(prompt).run(prompt).await
+    }
+
     async fn run(&mut self) -> Result<String> {
-        let turn = self.turn.take().unwrap();
-        tokio::time::timeout(Duration::from_secs(5), self.agent.run_in_turn(PROMPT, turn))
+        tokio::time::timeout(Duration::from_secs(5), self.run_prompt(PROMPT))
             .await
             .expect("controlled exchange timed out")
     }

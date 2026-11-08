@@ -64,35 +64,8 @@ impl Write for FailingWriter {
     }
 }
 
-fn configured_child(root: &Path, opt_in: Option<&str>) -> std::process::Output {
-    let mut command = std::process::Command::new(env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "diagnostics::tests::configuration::configured_start_fixture",
-            "--ignored",
-            "--nocapture",
-        ])
-        .env("XDG_STATE_HOME", root)
-        .env("HOME", "relative-invalid-home")
-        .env("RECORDER_TEST_SECRET", "fixture environment secret")
-        .env_remove("ROBBIE_TRANSCRIPT");
-    if let Some(value) = opt_in {
-        command.env("ROBBIE_TRANSCRIPT", value);
-    }
-    let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
-}
-
 mod storage;
 
 mod records;
 
 mod failures;
-
-mod configuration;
