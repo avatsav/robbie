@@ -9,7 +9,8 @@ use ratatui::{
     text::Line,
 };
 use serde_json::Value;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     diagnostics::frontend::TextAppend,
@@ -88,9 +89,9 @@ impl OutputLine {
             Self::Banner { model } => banner_rows(model, width),
             Self::UserPrompt { text } => user_prompt_rows(text, width),
             Self::Markdown(markdown) => markdown.rows(width),
-            Self::Wrapped((text, style)) => textwrap::wrap(text, width.max(1))
+            Self::Wrapped((text, style)) => crate::terminal_text::wrap(text, width.max(1))
                 .into_iter()
-                .map(|line| Line::styled(line.into_owned(), *style))
+                .map(|line| Line::styled(line.to_string(), *style))
                 .collect(),
             Self::Tool { summary, outcome } => vec![tool_line(summary, Some(outcome), width)],
             Self::ToolOutput { prefix, text } => {
@@ -392,7 +393,9 @@ impl App {
         match key.code {
             KeyCode::Enter if !self.input.trim().is_empty() => InputAction::Submit,
             KeyCode::Backspace => {
-                self.input.pop();
+                if let Some((start, _)) = self.input.grapheme_indices(true).next_back() {
+                    self.input.truncate(start);
+                }
                 InputAction::None
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) && !c.is_control() => {
@@ -414,7 +417,7 @@ fn user_prompt_rows(text: &str, width: usize) -> Vec<Line<'static>> {
     // Wrap only the body, then add the gutter to every physical row. Reserve
     // room for wide glyphs even when the viewport is too narrow for a full gutter.
     let prefix: String = "▌ ".chars().take(width.saturating_sub(2)).collect();
-    textwrap::wrap(text, width - prefix.width())
+    crate::terminal_text::wrap(text, width - prefix.width())
         .into_iter()
         .map(|part| Line::styled(format!("{prefix}{part}"), Style::new().fg(USER_ORANGE)))
         .collect()
@@ -430,7 +433,7 @@ fn banner_rows(model: &str, width: usize) -> Vec<Line<'static>> {
         clean(model).replace('\n', " ")
     );
     let mut brand_remaining = "robbie".len();
-    textwrap::wrap(&text, width - 2)
+    crate::terminal_text::wrap(&text, width - 2)
         .into_iter()
         .map(|part| {
             // Only the ASCII brand is bold, even if a very narrow terminal wraps it.
@@ -528,14 +531,11 @@ fn single_line(text: &str, width: usize) -> String {
         return String::new();
     }
     let mut result = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let cells = ch.width().unwrap_or(0);
-        if used + cells > width - 1 {
+    for (index, grapheme) in text.grapheme_indices(true) {
+        if text[..index + grapheme.len()].width() > width - 1 {
             break;
         }
-        result.push(ch);
-        used += cells;
+        result.push_str(grapheme);
     }
     result.push('…');
     result
@@ -549,14 +549,14 @@ fn diff_lines(lines: &mut Vec<StyledLine>, text: &str, prefix: &str, style: Styl
 
 // Tail clipping also keeps shell exit markers visible in narrow tool rows.
 fn input_tail(input: &str, width: usize) -> &str {
-    let mut used = 0;
-    for (index, ch) in input.char_indices().rev() {
-        used += ch.width().unwrap_or(0);
-        if used > width {
-            return &input[index + ch.len_utf8()..];
+    let mut start = input.len();
+    for (index, _) in input.grapheme_indices(true).rev() {
+        if input[index..].width() > width {
+            break;
         }
+        start = index;
     }
-    input
+    &input[start..]
 }
 
 #[cfg(test)]
@@ -575,6 +575,60 @@ mod tests {
             .collect();
         terminal.draw(|frame| frame.render_widget(Paragraph::new(rows), frame.area()))?;
         Ok(())
+    }
+
+    #[test]
+    fn clipping_respects_grapheme_boundaries_and_terminal_cell_budgets() {
+        for glyph in ["#\u{fe0f}", "1\u{fe0f}\u{20e3}", "👩‍💻", "👍🏽", "e\u{301}"] {
+            let text = format!("abc{glyph}xyz{glyph}");
+            let boundaries: Vec<_> = text
+                .grapheme_indices(true)
+                .map(|(index, _)| index)
+                .chain([text.len()])
+                .collect();
+            for width in 0..20 {
+                let head = single_line(&text, width);
+                assert!(head.width() <= width, "{text:?}: {head:?} at {width}");
+                let tail = input_tail(&text, width);
+                assert!(tail.width() <= width);
+                assert!(boundaries.contains(&(text.len() - tail.len())));
+                if text.width() > width && width > 0 {
+                    assert!(head.ends_with('…'));
+                    assert!(boundaries.contains(&(head.len() - '…'.len_utf8())));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn backspace_removes_one_displayed_grapheme() {
+        for glyph in ["e\u{301}", "👩‍💻", "👍🏽", "1\u{fe0f}\u{20e3}"] {
+            let mut app = App {
+                input: format!("prefix{glyph}"),
+                ..App::default()
+            };
+            app.handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::NONE,
+            )));
+            assert_eq!(app.input, "prefix");
+        }
+        let mut empty = App::default();
+        empty.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )));
+        assert!(empty.input.is_empty());
+    }
+
+    #[test]
+    fn submitted_prompts_wrap_without_splitting_graphemes() {
+        let rows = user_prompt_rows("👩‍💻👩‍💻", 4);
+        assert_eq!(
+            rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["▌ 👩‍💻", "▌ 👩‍💻"]
+        );
+        assert!(rows.iter().all(|row| row.width() == 4));
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod fullscreen;
 mod markdown;
 mod model;
 mod skills;
+mod terminal_text;
 mod tools;
 mod ui;
 use diagnostics::{

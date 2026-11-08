@@ -171,13 +171,11 @@ fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
 // No generated indentation/hyphens: every wrapped fragment remains a substring.
 fn wrap_body(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let plain = line.to_string();
-    let options =
-        textwrap::Options::new(width).word_splitter(textwrap::WordSplitter::NoHyphenation);
     let mut cursor = 0;
-    textwrap::wrap(&plain, options)
+    crate::terminal_text::wrap(&plain, width)
         .into_iter()
         .map(|part| {
-            let start = cursor + plain[cursor..].find(part.as_ref()).unwrap_or(0);
+            let start = cursor + plain[cursor..].find(part).unwrap_or(0);
             let end = start + part.len();
             cursor = end;
             let mut offset = 0;
@@ -485,6 +483,18 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn wrapping_keeps_styled_graphemes_whole() {
+        let rows = render("**👩‍💻👩‍💻**", 2);
+        assert_eq!(plain(&rows), "👩‍💻\n👩‍💻");
+        assert!(rows.iter().all(|row| row.width() == 2));
+        assert!(rows.iter().all(|row| {
+            effective_style(std::slice::from_ref(row), "👩‍💻")
+                .add_modifier
+                .contains(Modifier::BOLD)
+        }));
     }
 
     #[test]
