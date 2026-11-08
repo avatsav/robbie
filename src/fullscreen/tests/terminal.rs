@@ -9,20 +9,20 @@ fn completed_read_terminal_fixture() {
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
-                let mut workspace = ui::WorkspaceMonitor::start(std::env::current_dir().unwrap());
+                let directory = std::env::current_dir().unwrap();
+                let mut workspace = ui::WorkspaceMonitor::start(directory.clone());
                 let mut app = App::new("test/model");
                 workspace.apply_current(&mut app.content);
                 app.handle_event(Event::Paste("Read Cargo.toml and summarize dependencies".into()));
                 app.content.submit();
                 let mut keys = EventStream::new();
                 let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-                let mut tools = crate::tools::ToolRegistry::new();
                 let work = async {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     sender.send(AgentEvent { source: "main", kind: EventKind::ToolStarted {
                         name: "read_file".into(), input: json!({"path":"Cargo.toml"}),
                     }})?;
-                    let (output, is_error) = tools.execute("read_file", &json!({"path":"Cargo.toml"})).await;
+                    let (output, is_error) = crate::test_support::read_file(&directory, "Cargo.toml").await;
                     anyhow::ensure!(!is_error, "Cargo.toml read failed");
                     sender.send(AgentEvent { source: "main", kind: EventKind::ToolFinished {
                         name: "read_file".into(), output, is_error,
@@ -55,7 +55,8 @@ fn blocked_tool_terminal_fixture() {
         let mut terminal = ratatui::init();
         let result = async {
             let _modes = ScreenModes::new()?;
-            let mut workspace = ui::WorkspaceMonitor::start(std::env::current_dir().unwrap());
+            let directory = std::env::current_dir().unwrap();
+            let mut workspace = ui::WorkspaceMonitor::start(directory.clone());
             let mut app = App::default();
             workspace.apply_current(&mut app.content);
             assistant(
@@ -75,9 +76,8 @@ fn blocked_tool_terminal_fixture() {
             });
             let mut keys = EventStream::new();
             let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut tools = crate::tools::ToolRegistry::new();
             let work = async {
-                let (output, error) = tools.execute("read_file", &json!({"path": path})).await;
+                let (output, error) = crate::test_support::read_file(&directory, &path).await;
                 if error {
                     anyhow::bail!("{output}");
                 }

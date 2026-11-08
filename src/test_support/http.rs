@@ -1,8 +1,10 @@
-//! Loopback HTTP server and model-client fixtures; never calls a real provider.
+//! Loopback HTTP server and session fixtures; never calls a real provider.
+#[cfg(test)]
 use crate::{
     diagnostics::Recorder,
     model::{self, AnthropicMessages, ModelClient, OpenRouter, PromptCache},
 };
+#[cfg(test)]
 use reqwest::RequestBuilder;
 use std::{
     collections::VecDeque,
@@ -16,9 +18,9 @@ use std::{
     time::Duration,
 };
 
-pub(crate) const SUCCESS: &str = r#"{"content":[{"type":"text","text":"done"}]}"#;
+pub const SUCCESS: &str = r#"{"content":[{"type":"text","text":"done"}]}"#;
 
-pub(crate) enum Reply {
+pub enum Reply {
     Http(u16, &'static str, &'static str),
     HttpBytes(u16, &'static [u8]),
     TruncatedHttpBody(u16),
@@ -29,7 +31,7 @@ pub(crate) enum Reply {
     StallBody,
 }
 
-pub(crate) struct Server {
+pub struct Server {
     url: String,
     pub(crate) requests: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
@@ -37,7 +39,7 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub(crate) fn new(replies: Vec<Reply>) -> Self {
+    pub fn new(replies: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}/messages", listener.local_addr().unwrap());
@@ -144,6 +146,7 @@ impl Server {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn request(&self) -> RequestBuilder {
         model::client()
             .unwrap()
@@ -157,18 +160,22 @@ impl Server {
             )
     }
 
+    #[cfg(test)]
     pub(crate) fn model(&self) -> Arc<ModelClient> {
         self.model_with_recorder(Recorder::disabled())
     }
 
+    #[cfg(test)]
     pub(crate) fn model_with_recorder(&self, recorder: Recorder) -> Arc<ModelClient> {
         self.configured_model(recorder, PromptCache::default())
     }
 
+    #[cfg(test)]
     pub(crate) fn model_with_prompt_cache(&self, prompt_cache: PromptCache) -> Arc<ModelClient> {
         self.configured_model(Recorder::disabled(), prompt_cache)
     }
 
+    #[cfg(test)]
     fn configured_model(&self, recorder: Recorder, prompt_cache: PromptCache) -> Arc<ModelClient> {
         Arc::new(
             ModelClient::new(
@@ -183,7 +190,25 @@ impl Server {
         )
     }
 
-    pub(crate) fn count(&self) -> usize {
+    /// Construct a normal session whose model requests can only reach this server.
+    #[cfg(unix)]
+    pub async fn session(
+        &self,
+        config: crate::session::SessionConfig,
+    ) -> anyhow::Result<(
+        crate::session::Session,
+        crate::session::ActivityReceiver,
+        super::RecordingControl,
+    )> {
+        let base_url = self.url.strip_suffix("/messages").unwrap().to_owned();
+        let (session, receiver) =
+            crate::session::Session::connect(config, |provider| provider.with_base_url(base_url))
+                .await?;
+        let control = session.recording_control();
+        Ok((session, receiver, control))
+    }
+
+    pub fn count(&self) -> usize {
         self.requests.lock().unwrap().len()
     }
 }

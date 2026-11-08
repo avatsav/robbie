@@ -351,7 +351,7 @@ mod animation_tests {
 
     #[test]
     fn agent_events_select_scenes_and_keep_parent_tools_working() {
-        use crate::events::{AgentEvent, EventKind};
+        use crate::session::{AgentEvent, EventKind};
         use serde_json::json;
 
         let mut app = crate::ui::App::default();

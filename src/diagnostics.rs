@@ -182,8 +182,8 @@ impl Recorder {
         }
     }
 
-    #[cfg(all(test, unix))]
-    pub fn break_writer_for_test(&self) {
+    #[cfg(all(unix, any(test, feature = "test-support")))]
+    pub(crate) fn break_writer_for_test(&self) {
         let mut journal = self.lock();
         // A read-only descriptor deterministically rejects writes on both macOS
         // and Linux, without changing process permissions or depending on /dev/full.

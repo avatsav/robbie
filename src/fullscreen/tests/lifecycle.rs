@@ -1,21 +1,22 @@
 use super::*;
 
 #[cfg(unix)]
-#[test]
-fn model_recorder_failure_becomes_one_visible_notice_without_losing_the_draft() {
+#[tokio::test]
+async fn model_recorder_failure_becomes_one_visible_notice_without_losing_the_draft() {
+    use crate::test_support::{Reply, SUCCESS, Server};
     let root = tempfile::tempdir().unwrap();
-    let recorder = crate::diagnostics::Recorder::for_test(root.path(), false);
-    let server = crate::test_support::Server::new(vec![]);
-    let (session, _) = Session::for_test(
-        server.model_with_recorder(recorder.clone()),
-        std::env::current_dir().unwrap(),
-        recorder.clone(),
-    );
+    let server = Server::new(vec![Reply::Http(200, "", SUCCESS)]);
+    let (mut session, _, control) = server
+        .session(session_config(root.path(), false))
+        .await
+        .unwrap();
     let mut app = App::new("test/model");
     app.recorder = Some(session.recording());
     app.handle_event(Event::Paste("my next draft".into()));
-    recorder.break_writer_for_test();
-    drop(recorder.model_request("main", "test/model", &json!({})));
+    let turn = session.prepare_turn();
+    control.fail_writes();
+    assert_eq!(turn.run("record a model request").await.unwrap(), "done");
+    assert_eq!(server.count(), 1);
     app.recording_warning();
     app.recording_warning();
     let text = history(&mut app);

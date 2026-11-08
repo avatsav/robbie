@@ -63,6 +63,15 @@ pub struct Session {
 impl Session {
     /// Uses the caller's Tokio runtime; creates no terminal or detached turn task.
     pub async fn new(config: SessionConfig) -> Result<(Self, ActivityReceiver)> {
+        Self::connect(config, |provider| provider).await
+    }
+
+    // The fixture path changes only the connection address; construction and
+    // agent assembly remain identical to normal session startup.
+    pub(crate) async fn connect(
+        config: SessionConfig,
+        configure_provider: impl FnOnce(OpenRouter) -> OpenRouter,
+    ) -> Result<(Self, ActivityReceiver)> {
         ensure!(
             config.workspace.is_absolute(),
             "workspace must be an absolute path"
@@ -77,7 +86,7 @@ impl Session {
         let model = Arc::new(
             ModelClient::new(
                 model::client()?,
-                OpenRouter::new(config.model.api_key, config.model.upstream),
+                configure_provider(OpenRouter::new(config.model.api_key, config.model.upstream)),
                 AnthropicMessages,
                 config.model.model,
                 recorder.clone(),
@@ -119,6 +128,13 @@ impl Session {
         self.recording.clone()
     }
 
+    #[cfg(all(unix, any(test, feature = "test-support")))]
+    pub(crate) fn recording_control(&self) -> RecordingControl {
+        RecordingControl {
+            recorder: self.recording.recorder.clone(),
+        }
+    }
+
     /// Allocates correlation now, before the execution future's first poll.
     pub fn prepare_turn(&mut self) -> PreparedTurn<'_> {
         let turn = self.agent.prepare_turn(None);
@@ -129,7 +145,7 @@ impl Session {
     }
 
     #[cfg(all(test, unix))]
-    pub(crate) fn for_test(
+    fn for_test(
         model: Arc<ModelClient>,
         workspace: PathBuf,
         recorder: Recorder,
@@ -140,6 +156,22 @@ impl Session {
             workspace,
             recorder,
         )
+    }
+}
+
+/// Fixture-only fault control; never exposes the journal or changes capture policy.
+#[cfg(all(unix, any(test, feature = "test-support")))]
+#[derive(Clone)]
+pub struct RecordingControl {
+    recorder: Recorder,
+}
+
+#[cfg(all(unix, any(test, feature = "test-support")))]
+impl RecordingControl {
+    /// Make subsequent appends fail. Requires a successfully opened recording;
+    /// the next real recording operation emits the normal nonfatal warning.
+    pub fn fail_writes(&self) {
+        self.recorder.break_writer_for_test();
     }
 }
 

@@ -33,8 +33,8 @@ impl OpenRouter {
         }
     }
 
-    #[cfg(test)]
-    pub fn with_base_url(mut self, base_url: String) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn with_base_url(mut self, base_url: String) -> Self {
         self.base_url = base_url;
         self
     }

@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 
 use serde_json::Value;
 
-pub(crate) fn log(root: &Path) -> Vec<Value> {
+pub fn log(root: &Path) -> Vec<Value> {
     let paths: Vec<_> = fs::read_dir(root.join("robbie/sessions"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -16,7 +16,7 @@ pub(crate) fn log(root: &Path) -> Vec<Value> {
         .collect()
 }
 
-pub(crate) fn events<'a>(records: &'a [Value], event: &str) -> Vec<&'a Value> {
+pub fn events<'a>(records: &'a [Value], event: &str) -> Vec<&'a Value> {
     records
         .iter()
         .filter(|record| record["event"] == event)

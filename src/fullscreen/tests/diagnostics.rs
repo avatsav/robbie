@@ -2,9 +2,8 @@
 //! We exercise the completion-drain handlers, not terminal input or real pixels.
 use super::*;
 use crate::{
-    diagnostics::Recorder,
     session::PreparedTurn,
-    test_support::{Reply, Server, events, log},
+    test_support::{RecordingControl, Reply, Server, events, log},
 };
 use ratatui::{Terminal, backend::TestBackend};
 use serde_json::Value;
@@ -20,18 +19,16 @@ struct Fixture {
     session: Session,
     receiver: UnboundedReceiver<AgentEvent>,
     app: App,
-    ui_start_fault: Option<Recorder>,
+    control: RecordingControl,
+    ui_start_fault: bool,
 }
 
 impl Fixture {
-    fn new(server: &Server, recorder: &Recorder) -> Self {
-        Self::with_ui_start_fault(server, recorder, false)
-    }
-
-    fn with_ui_start_fault(server: &Server, recorder: &Recorder, fail: bool) -> Self {
-        let model = server.model_with_recorder(recorder.clone());
-        let (session, receiver) =
-            Session::for_test(model, std::env::current_dir().unwrap(), recorder.clone());
+    async fn new(server: &Server, root: &std::path::Path, transcript: bool) -> Self {
+        let (session, receiver, control) = server
+            .session(session_config(root, transcript))
+            .await
+            .unwrap();
         let mut app = App {
             recorder: Some(session.recording()),
             ..App::default()
@@ -43,14 +40,21 @@ impl Fixture {
             session,
             receiver,
             app,
-            ui_start_fault: fail.then(|| recorder.clone()),
+            control,
+            ui_start_fault: false,
         }
+    }
+
+    async fn with_ui_start_fault(server: &Server, root: &std::path::Path, fail: bool) -> Self {
+        let mut fixture = Self::new(server, root, false).await;
+        fixture.ui_start_fault = fail;
+        fixture
     }
 
     fn prepare(&mut self, submitted: &str) -> PreparedTurn<'_> {
         let turn = self.session.prepare_turn();
-        if let Some(recorder) = self.ui_start_fault.take() {
-            recorder.break_writer_for_test();
+        if std::mem::take(&mut self.ui_start_fault) {
+            self.control.fail_writes();
         }
         self.app.ui_turn = Some(turn.record_frontend(submitted));
         turn

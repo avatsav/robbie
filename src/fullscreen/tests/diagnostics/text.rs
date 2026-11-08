@@ -4,9 +4,8 @@ use super::*;
 async fn text_is_correlated_received_and_appended_with_private_opt_in_content() {
     for transcript in [false, true] {
         let root = tempfile::tempdir().unwrap();
-        let recorder = Recorder::for_test(root.path(), transcript);
         let server = Server::new(vec![Reply::Http(200, "", TEXT)]);
-        let mut fixture = Fixture::new(&server, &recorder);
+        let mut fixture = Fixture::new(&server, root.path(), transcript).await;
         let result = fixture.run().await;
         // Agent completion alone does not acknowledge frontend consumption.
         let before = log(root.path());
@@ -75,13 +74,12 @@ async fn text_is_correlated_received_and_appended_with_private_opt_in_content() 
 #[tokio::test]
 async fn empty_and_whitespace_blocks_are_appends_not_a_claim_of_visible_text() {
     let root = tempfile::tempdir().unwrap();
-    let recorder = Recorder::for_test(root.path(), false);
     let server = Server::new(vec![Reply::Http(
         200,
         "",
         r#"{"content":[{"type":"text","text":""},{"type":"text","text":" \n\t"}]}"#,
     )]);
-    let mut fixture = Fixture::new(&server, &recorder);
+    let mut fixture = Fixture::new(&server, root.path(), false).await;
     let result = fixture.run().await;
     fixture.consume(false);
     assert_eq!(fixture.finish(result).unwrap().len(), 4);
@@ -98,12 +96,11 @@ async fn empty_and_whitespace_blocks_are_appends_not_a_claim_of_visible_text() {
 async fn empty_follow_up_after_tools_is_not_downstream_text_loss() {
     for (first, preface_bytes) in [(TOOL, 0), (PREFACE_TOOL, 7)] {
         let root = tempfile::tempdir().unwrap();
-        let recorder = Recorder::for_test(root.path(), false);
         let server = Server::new(vec![
             Reply::Http(200, "", first),
             Reply::Http(200, "", EMPTY),
         ]);
-        let mut fixture = Fixture::new(&server, &recorder);
+        let mut fixture = Fixture::new(&server, root.path(), false).await;
         let result = fixture.run().await;
         fixture.consume(false);
         assert_eq!(fixture.finish(result).unwrap(), "");
@@ -143,9 +140,8 @@ async fn token_limit_is_observed_without_automatic_continuation() {
         ),
     ] {
         let root = tempfile::tempdir().unwrap();
-        let recorder = Recorder::for_test(root.path(), false);
         let server = Server::new(vec![Reply::Http(200, "", body)]);
-        let mut fixture = Fixture::new(&server, &recorder);
+        let mut fixture = Fixture::new(&server, root.path(), false).await;
         let result = fixture.run().await;
         fixture.consume(false);
         fixture.finish(result);
@@ -169,9 +165,8 @@ async fn token_limit_is_observed_without_automatic_continuation() {
 #[tokio::test]
 async fn enqueued_but_discarded_text_stays_distinct_from_empty_model_output() {
     let root = tempfile::tempdir().unwrap();
-    let recorder = Recorder::for_test(root.path(), false);
     let server = Server::new(vec![Reply::Http(200, "", TEXT)]);
-    let mut fixture = Fixture::new(&server, &recorder);
+    let mut fixture = Fixture::new(&server, root.path(), false).await;
     let result = fixture.run().await;
     fixture.consume(true);
     assert_eq!(fixture.finish(result).unwrap().len(), 21);
@@ -203,7 +198,6 @@ async fn enqueued_but_discarded_text_stays_distinct_from_empty_model_output() {
 #[tokio::test]
 async fn child_text_joins_the_root_ui_turn_without_losing_its_own_request_identity() {
     let root = tempfile::tempdir().unwrap();
-    let recorder = Recorder::for_test(root.path(), false);
     let server = Server::new(vec![
         Reply::Http(503, "Retry-After: 0\r\n", "private unavailable body"),
         Reply::Http(
@@ -222,7 +216,7 @@ async fn child_text_joins_the_root_ui_turn_without_losing_its_own_request_identi
             r#"{"content":[{"type":"text","text":"PARENT_OK"}]}"#,
         ),
     ]);
-    let mut fixture = Fixture::new(&server, &recorder);
+    let mut fixture = Fixture::new(&server, root.path(), false).await;
     let result = fixture.run().await;
     fixture.consume(false);
     assert_eq!(fixture.finish(result).unwrap(), "PARENT_OK");

@@ -241,7 +241,7 @@ fn tail_ellipsis(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{AgentEvent, EventKind};
+    use crate::session::{AgentEvent, EventKind};
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
 

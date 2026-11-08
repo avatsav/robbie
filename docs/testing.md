@@ -24,7 +24,7 @@ Frontend ownership matters:
 - Review a suite around **300 lines or 15 tests**, or sooner when it covers distinct behaviors. This is a project review trigger, not a Rust rule or hard limit.
 - Split larger, mixed-concern suites into `<module>/tests/<behavior>.rs`. Keep `<module>/tests.rs` as the test-module index and home for helpers shared only by that suite. Child files use `use super::*` to retain private access.
 - Name files for behaviors such as `input`, `retries`, or `lifecycle`; avoid numbered parts and repeated `_tests` suffixes beneath a `tests` directory.
-- Keep specialized fixtures with their suite. Fixtures reused across owners belong in `src/test_support/{http,journal,agent}.rs`, re-exported through its test-only `mod.rs`.
+- Keep specialized fixtures with their suite. Shared fixtures live in `src/test_support/`. Loopback session setup, opaque recording fault controls, journal readers, and the one-shot PTY read helper compile under `#[cfg(test)]` or the default-off `test-support` feature. Raw model/agent inspection remains crate-local and `#[cfg(test)]`-only.
 - Preserve test cases when reorganizing. Update subprocess fixture selectors and compare test inventories as well as running the tests.
 
 ## Checks and limits

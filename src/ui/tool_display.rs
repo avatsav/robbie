@@ -90,9 +90,39 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn every_registered_tool_has_an_explicit_presentation() {
-        for schema in crate::tools::ToolRegistry::new().schemas() {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn every_registered_tool_has_an_explicit_presentation() {
+        use crate::{
+            session::{
+                CapturePolicy, ModelSettings, PromptCache, RecordingSettings, SessionConfig,
+            },
+            test_support::{Server, events, log},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let server = Server::new(vec![]);
+        let (_session, _, _) = server
+            .session(SessionConfig {
+                skills_directory: workspace.join("skills"),
+                workspace,
+                model: ModelSettings {
+                    api_key: "test-secret".into(),
+                    model: "test".into(),
+                    upstream: None,
+                    prompt_cache: PromptCache::Short,
+                },
+                recording: RecordingSettings {
+                    state_directory: Some(root.path().to_owned()),
+                    capture: CapturePolicy::Transcript,
+                },
+            })
+            .await
+            .unwrap();
+        let records = log(root.path());
+        let context = events(&records, "session_context")[0];
+        for schema in context["content"]["tools"].as_array().unwrap() {
             let name = schema["name"].as_str().unwrap();
             assert!(
                 PRESENTATIONS.iter().any(|(id, _)| *id == name),

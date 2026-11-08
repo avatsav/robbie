@@ -25,7 +25,9 @@ Press Ctrl+C to exit. Restart after changing environment variables.
 ```sh
 cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo check --locked --bin robbie --features test-support
 cargo test --locked
+cargo test --locked --all-features
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
