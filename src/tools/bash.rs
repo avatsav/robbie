@@ -19,40 +19,147 @@ use super::Tool;
 pub(super) struct Bash(pub(super) Arc<PathBuf>);
 
 const MAX_CHARS: usize = 50_000;
-// Four UTF-8 bytes per retained character, plus lookahead/boundary slack.
-const MAX_BYTES: usize = (MAX_CHARS + 1) * 4 + 3;
-
 #[derive(Debug, Default)]
-struct Tail {
-    bytes: VecDeque<u8>,
+struct TextBuffer {
+    chars: VecDeque<char>,
     discarded: bool,
 }
 
-impl Tail {
-    fn push(&mut self, bytes: &[u8]) {
-        if bytes.len() >= MAX_BYTES {
-            self.discarded |= !self.bytes.is_empty() || bytes.len() > MAX_BYTES;
-            self.bytes.clear();
-            self.bytes.extend(&bytes[bytes.len() - MAX_BYTES..]);
-        } else {
-            let excess = (self.bytes.len() + bytes.len()).saturating_sub(MAX_BYTES);
-            self.discarded |= excess > 0;
-            self.bytes.drain(..excess);
-            self.bytes.extend(bytes);
+impl TextBuffer {
+    fn push(&mut self, ch: char) {
+        if self.chars.len() == MAX_CHARS + 1 {
+            self.chars.pop_front();
+            self.discarded = true;
         }
+        self.chars.push_back(ch);
+    }
+
+    fn append(&mut self, other: Self) {
+        self.discarded |= other.discarded;
+        for ch in other.chars {
+            self.push(ch);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Tail {
+    // Whitespace is separate because trimming precedes truncation. Otherwise a
+    // huge whitespace suffix could evict a short answer. All three are bounded;
+    // leading/trailing whitespace is retained only to join stdout with stderr.
+    leading: TextBuffer,
+    body: TextBuffer,
+    trailing: TextBuffer,
+    // Only these raw boundary bytes can participate in a code point crossing
+    // the stdout/stderr seam: up to three leading continuations and a partial EOF.
+    prefix: Vec<u8>,
+    suffix: Vec<u8>,
+}
+
+impl Tail {
+    fn push_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                if self.body.chars.is_empty() {
+                    self.leading.push(ch);
+                } else {
+                    self.trailing.push(ch);
+                }
+            } else {
+                self.body.append(std::mem::take(&mut self.trailing));
+                self.body.push(ch);
+            }
+        }
+    }
+
+    fn append(&mut self, other: Self) {
+        if self.body.chars.is_empty() {
+            self.leading.append(other.leading);
+        } else {
+            self.trailing.append(other.leading);
+        }
+        if !other.body.chars.is_empty() {
+            self.body.append(std::mem::take(&mut self.trailing));
+            self.body.append(other.body);
+        }
+        self.trailing.append(other.trailing);
+    }
+
+    // Return consumed bytes, leaving only an incomplete UTF-8 code point for
+    // the next read. Invalid sequences use the same replacement as from_utf8_lossy.
+    fn decode(&mut self, bytes: &[u8]) -> usize {
+        let mut consumed = 0;
+        while consumed < bytes.len() {
+            match std::str::from_utf8(&bytes[consumed..]) {
+                Ok(text) => {
+                    self.push_text(text);
+                    return bytes.len();
+                }
+                Err(error) => {
+                    let end = consumed + error.valid_up_to();
+                    self.push_text(
+                        std::str::from_utf8(&bytes[consumed..end]).expect("validated UTF-8 prefix"),
+                    );
+                    consumed = end;
+                    match error.error_len() {
+                        Some(len) => {
+                            self.push_text("�");
+                            consumed += len;
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        consumed
     }
 }
 
 async fn read_tail(mut pipe: impl AsyncRead + Unpin) -> io::Result<Tail> {
     let mut tail = Tail::default();
     let mut chunk = [0; 8192];
+    let mut pending = Vec::new();
+    let mut at_start = true;
     loop {
         let read = pipe.read(&mut chunk).await?;
         if read == 0 {
+            tail.suffix = pending;
             return Ok(tail);
         }
-        tail.push(&chunk[..read]);
+        let mut start = 0;
+        while at_start && start < read {
+            if tail.prefix.len() < 3 && (0x80..=0xbf).contains(&chunk[start]) {
+                tail.prefix.push(chunk[start]);
+                start += 1;
+            } else {
+                at_start = false;
+            }
+        }
+        pending.extend_from_slice(&chunk[start..read]);
+        let consumed = tail.decode(&pending);
+        pending.drain(..consumed);
+        debug_assert!(pending.len() < 4);
     }
+}
+
+fn output_text(mut stdout: Tail, mut stderr: Tail) -> (String, bool) {
+    let mut content = Tail::default();
+    content.push_text(&String::from_utf8_lossy(&std::mem::take(
+        &mut stdout.prefix,
+    )));
+    let mut seam = std::mem::take(&mut stdout.suffix);
+    seam.extend(std::mem::take(&mut stderr.prefix));
+    let suffix = std::mem::take(&mut stderr.suffix);
+    content.append(stdout);
+    content.push_text(&String::from_utf8_lossy(&seam));
+    content.append(stderr);
+    content.push_text(&String::from_utf8_lossy(&suffix));
+    let mut body = content.body;
+    let truncated = body.discarded || body.chars.len() > MAX_CHARS;
+    if body.chars.len() > MAX_CHARS {
+        body.chars.pop_front();
+    }
+    (body.chars.into_iter().collect(), truncated)
 }
 
 #[derive(Debug)]
@@ -142,23 +249,7 @@ impl Tool for Bash {
         };
         match run(command, Duration::from_secs(120), &self.0).await {
             Ok(Some(output)) => {
-                let discarded = output.stdout.discarded || output.stderr.discarded;
-                // Preserve the existing stdout-then-stderr presentation; both
-                // acquisitions and this combined allocation are bounded.
-                let combined: Vec<_> = output
-                    .stdout
-                    .bytes
-                    .into_iter()
-                    .chain(output.stderr.bytes)
-                    .collect();
-                let text = String::from_utf8_lossy(&combined);
-                let text = text.trim();
-                // Keep the end of long command output: failures and summaries
-                // usually live there, and the UI previews this same tail.
-                let mut tail: Vec<_> = text.chars().rev().take(MAX_CHARS + 1).collect();
-                let truncated = discarded || tail.len() > MAX_CHARS;
-                tail.truncate(MAX_CHARS);
-                let result: String = tail.into_iter().rev().collect();
+                let (result, truncated) = output_text(output.stdout, output.stderr);
                 let result = if result.is_empty() {
                     "(no output)".to_string()
                 } else {
@@ -188,17 +279,129 @@ mod tests {
         super::run(command, timeout, Path::new(".")).await
     }
 
+    #[tokio::test]
+    async fn meaningful_output_survives_excessive_trailing_whitespace() {
+        let mut bash = Bash(Arc::new(std::env::current_dir().unwrap()));
+        for (command, expected) in [
+            ("printf '\\303\\251'; printf '%200006s' ''", "é\n[exit 0]"),
+            ("printf answer; printf '%300000s' ''", "answer\n[exit 0]"),
+            (
+                "printf '%300000s' ''; printf answer >&2",
+                "answer\n[exit 0]",
+            ),
+            (
+                "printf answer; printf '%300000s' '' >&2",
+                "answer\n[exit 0]",
+            ),
+        ] {
+            assert_eq!(
+                bash.execute(&json!({"command":command})).await,
+                (expected.into(), false)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_stdout_stderr_boundary_matches_concatenate_then_decode() {
+        let mut bash = Bash(Arc::new(std::env::current_dir().unwrap()));
+        assert_eq!(
+            bash.execute(&json!({"command":"printf '\\303'; printf '\\251' >&2"}))
+                .await,
+            ("é\n[exit 0]".into(), false)
+        );
+        let cases: &[&[u8]] = &[
+            b"",
+            b"\xc3",
+            b"\xa9",
+            b"\xf0\x9f",
+            b"\x91\xa9",
+            b"a\xe2\x80",
+            b"\x83b",
+            b"\x80 \t",
+            b"\x80\x80\x80\x80",
+            b"\xf0",
+            b" \xc3",
+            b"\xff",
+            b"\xe2\x80",
+            b"\x83after",
+        ];
+        for stdout in cases {
+            for stderr in cases {
+                let bytes = [*stdout, *stderr].concat();
+                let expected = String::from_utf8_lossy(&bytes).trim().to_string();
+                let actual = output_text(
+                    read_tail(*stdout).await.unwrap(),
+                    read_tail(*stderr).await.unwrap(),
+                );
+                assert_eq!(
+                    actual,
+                    (expected, false),
+                    "stdout={stdout:?}, stderr={stderr:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_capture_matches_trim_then_character_tail_for_both_streams() {
+        let cases = [
+            String::new(),
+            " \té\n猫 \n".into(),
+            "é".repeat(MAX_CHARS + 1),
+            " ".repeat(MAX_CHARS * 2),
+            format!("answer{}", " ".repeat(MAX_CHARS * 2)),
+            format!("{}end", " ".repeat(MAX_CHARS * 2)),
+            format!("start{}end", "\u{2003}".repeat(MAX_CHARS * 2)),
+        ];
+        for stdout in &cases {
+            for stderr in &cases {
+                let original = format!("{stdout}{stderr}");
+                let trimmed = original.trim();
+                let expected: String = trimmed
+                    .chars()
+                    .rev()
+                    .take(MAX_CHARS)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                let actual = output_text(
+                    read_tail(stdout.as_bytes()).await.unwrap(),
+                    read_tail(stderr.as_bytes()).await.unwrap(),
+                );
+                assert_eq!(actual, (expected, trimmed.chars().count() > MAX_CHARS));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn incremental_lossy_decoding_preserves_codepoints_across_reads() {
+        let mut bytes = vec![b'a'; 8191];
+        bytes.extend_from_slice("é猫👩‍💻".as_bytes());
+        bytes.extend_from_slice(&[0xff, 0xc3]);
+        let expected = String::from_utf8_lossy(&bytes).into_owned();
+        assert_eq!(
+            output_text(read_tail(bytes.as_slice()).await.unwrap(), Tail::default()),
+            (expected, false)
+        );
+    }
+
     #[test]
     fn tail_storage_is_bounded_across_small_and_oversized_chunks() {
         let mut tail = Tail::default();
         for _ in 0..100 {
-            tail.push(&[b'x'; 8192]);
-            assert!(tail.bytes.len() <= MAX_BYTES);
+            tail.push_text(&"x".repeat(8192));
+            assert!(tail.body.chars.len() <= MAX_CHARS + 1);
         }
-        assert!(tail.discarded);
-        tail.push(&vec![b'y'; MAX_BYTES * 2]);
-        assert_eq!(tail.bytes.len(), MAX_BYTES);
-        assert!(tail.bytes.iter().all(|byte| *byte == b'y'));
+        assert!(tail.body.discarded);
+        tail.push_text(&"y".repeat(MAX_CHARS * 2));
+        assert_eq!(tail.body.chars.len(), MAX_CHARS + 1);
+        assert!(tail.body.chars.iter().all(|ch| *ch == 'y'));
+        tail.push_text(&" ".repeat(MAX_CHARS * 2));
+        assert_eq!(tail.trailing.chars.len(), MAX_CHARS + 1);
+        let mut leading = Tail::default();
+        leading.push_text(&" ".repeat(MAX_CHARS * 2));
+        assert_eq!(leading.leading.chars.len(), MAX_CHARS + 1);
     }
 
     #[tokio::test]
@@ -209,10 +412,10 @@ mod tests {
         ).await.unwrap().unwrap();
         assert!(output.status.success());
         for (tail, suffix) in [(output.stdout, "OUT_TAIL"), (output.stderr, "ERR_TAIL")] {
-            assert!(tail.discarded);
-            assert_eq!(tail.bytes.len(), MAX_BYTES);
-            let bytes: Vec<_> = tail.bytes.into_iter().collect();
-            assert!(bytes.ends_with(suffix.as_bytes()));
+            assert!(tail.body.discarded);
+            assert_eq!(tail.body.chars.len(), MAX_CHARS + 1);
+            let text: String = tail.body.chars.into_iter().collect();
+            assert!(text.ends_with(suffix));
         }
     }
 

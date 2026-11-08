@@ -206,7 +206,7 @@ The known PTY anomaly was not rerun. No authenticated model calls were made. Thi
 Each item should be a focused, validated commit. Keep behavior changes separate from mechanical organization changes.
 
 - [x] Stop shell descendants on timeout/cancellation (Unix process-group guard; timeout and cancellation regressions).
-- [x] Bound shell-output acquisition (concurrent pipe draining into fixed-size tails; storage and noisy-pipe regressions).
+- [x] Bound shell-output acquisition (concurrent pipe draining into bounded character/whitespace tails; UTF-8-safe truncation, stdout/stderr boundary decoding, storage and noisy-pipe regressions).
 - [x] Bound file-read acquisition (fixed read-ahead, incremental UTF-8 prefix decoding, line/character limits; infinite-source and UTF-8 regressions).
 - [x] Reject structurally malformed response blocks before execution (decoder and real-agent HTTP regressions; unknown typed blocks remain lossless).
 - [x] Fix Unicode clipping, wrapping, and Backspace (grapheme-safe fragments/clipping/editing; cell-budget, styled Markdown, prompt, and input regressions).
@@ -217,3 +217,11 @@ Each item should be a focused, validated commit. Keep behavior changes separate 
 - [x] Move large inline test suites into colocated test files (UI, fullscreen, model, diagnostics, Markdown); module identities and private unit-test access are unchanged.
 
 Keep the current overall design; strengthen these specific seams rather than adding more architectural layers.
+
+## Post-fix validation
+
+All implementation items above are complete in separate logical commits. Formatting, strict Clippy, 252 Rust tests (5 ignored), 3 Python hook tests, and the release build pass. Active Rust LSP diagnostics are checked on changed files.
+
+The independent follow-up exposed shell-capture edge cases involving trailing whitespace and UTF-8 split across stdout/stderr. Regression coverage now compares bounded output with the original trim-then-tail behavior and concatenate-then-decode byte boundaries. The final independent check confirmed both findings resolved and reported no further issues.
+
+No `lib.rs`, Cargo workspace, provider framework, permissions system, compaction policy, or authenticated model calls were added. The existing manual-terminal and PTY limitations remain unchanged.
