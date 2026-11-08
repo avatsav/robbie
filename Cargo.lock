@@ -2119,29 +2119,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "robbie"
+name = "robbie-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "crossterm",
  "dotenvy",
  "futures-util",
- "httpdate",
  "image",
  "libc",
  "ratatui",
  "ratatui-image",
- "reqwest",
- "serde",
+ "robbie-core",
  "serde_json",
- "serde_yaml_ng",
  "tempfile",
  "textwrap",
  "tokio",
  "tui-markdown",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "robbie-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "httpdate",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "tokio",
  "walkdir",
 ]
 

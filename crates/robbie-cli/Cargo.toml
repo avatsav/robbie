@@ -1,0 +1,32 @@
+[package]
+name = "robbie-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "robbie"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+crossterm = { version = "0.29", features = ["event-stream", "osc52", "use-dev-tty"] }
+dotenvy = "0.15"
+futures-util = "0.3.34"
+image = { version = "0.25", default-features = false }
+ratatui = "0.30"
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
+robbie-core = { path = "../robbie-core" }
+serde_json.workspace = true
+textwrap = "0.16.4"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "time", "sync"] }
+tui-markdown = { version = "0.3.13", default-features = false }
+unicode-segmentation = "1"
+unicode-width = "0.2.3"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+robbie-core = { path = "../robbie-core", features = ["test-support"] }
+tempfile.workspace = true

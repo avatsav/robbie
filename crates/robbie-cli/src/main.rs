@@ -2,24 +2,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-mod agent;
-mod diagnostics;
-mod events;
 mod fullscreen;
 mod markdown;
-mod model;
-mod session;
-mod skills;
 mod terminal_text;
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_support;
-mod tools;
 mod ui;
+
+use robbie_core as session;
 #[cfg(test)]
-use agent::Agent;
+use robbie_core::test_support;
 use session::{CapturePolicy, ModelSettings, RecordingSettings, Session, SessionConfig};
-#[cfg(test)]
-use tools::ToolRegistry;
 
 fn validate_args(args: &[String]) -> Result<()> {
     if let Some(arg) = args.first() {
@@ -126,13 +117,15 @@ mod tests {
                 "--ignored",
                 "--nocapture",
             ])
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(status) = child.try_wait().unwrap() {
                 assert!(status.success());
+                let output = child.wait_with_output().unwrap();
+                assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
                 break;
             }
             if Instant::now() >= deadline {

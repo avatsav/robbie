@@ -23,12 +23,18 @@ Press Ctrl+C to exit. Restart after changing environment variables.
 ## Checks
 
 ```sh
-cargo fmt --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo check --locked --bin robbie --features test-support
-cargo test --locked
-cargo test --locked --all-features
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo check --locked -p robbie-core --features test-support
+cargo test --locked --workspace
+cargo test --locked --workspace --all-features
 python3 -m unittest discover -s tests -p 'test_*.py'
+```
+
+Verify Unix PTY target/fixture discovery without running terminal scenarios:
+
+```sh
+python3 tests/terminal/blocked_tool_exit.py --check-discovery
 ```
 
 Optional Unix PTY check (known resize/Ctrl+C timeout):

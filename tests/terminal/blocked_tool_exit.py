@@ -6,6 +6,7 @@ FIFO, including scrolling, drag-to-copy, resizing, and terminal restoration.
 Clipboard requests are captured as bytes, never sent to a real host clipboard.
 """
 
+import argparse
 import base64
 import fcntl
 import json
@@ -22,22 +23,64 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-build = subprocess.run(
-    ["cargo", "test", "--locked", "--no-run", "--message-format=json"],
-    cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True,
+FIXTURES = (
+    "fullscreen::tests::terminal::completed_read_terminal_fixture",
+    "fullscreen::tests::terminal::blocked_tool_terminal_fixture",
 )
-binaries = [
-    item["executable"]
-    for line in build.stdout.splitlines()
-    if (item := json.loads(line)).get("reason") == "compiler-artifact"
-    and item.get("executable") and item.get("profile", {}).get("test")
-]
-assert len(binaries) == 1, f"Expected one test binary, got {len(binaries)}"
+
+
+def select_test_binary(artifacts, package_id, source_path):
+    binaries = [
+        item["executable"]
+        for item in artifacts
+        if item.get("reason") == "compiler-artifact"
+        and item.get("package_id") == package_id
+        and item.get("target", {}).get("name") == "robbie"
+        and item.get("target", {}).get("kind") == ["bin"]
+        and item.get("target", {}).get("src_path") == source_path
+        and item.get("profile", {}).get("test") is True
+        and item.get("executable")
+    ]
+    assert len(binaries) == 1, f"Expected one robbie-cli bin test artifact, got {len(binaries)}"
+    return binaries[0]
+
+
+def build_test_binary():
+    metadata = subprocess.run(
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version=1"],
+        cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True,
+    )
+    packages = [item for item in json.loads(metadata.stdout)["packages"] if item["name"] == "robbie-cli"]
+    assert len(packages) == 1, "Expected the robbie-cli package"
+    package = packages[0]
+    targets = [item for item in package["targets"] if item["name"] == "robbie" and item["kind"] == ["bin"]]
+    assert len(targets) == 1, "Expected the robbie bin target"
+    build = subprocess.run(
+        ["cargo", "test", "--locked", "-p", "robbie-cli", "--bin", "robbie", "--no-run", "--message-format=json"],
+        cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True,
+    )
+    artifacts = [json.loads(line) for line in build.stdout.splitlines()]
+    binary = select_test_binary(artifacts, package["id"], targets[0]["src_path"])
+    assert Path(binary).is_file() and os.access(binary, os.X_OK), f"Test binary is not executable: {binary}"
+    return binary
+
+
+def verify_fixture_selectors(binary):
+    for fixture in FIXTURES:
+        listed = subprocess.run(
+            [binary, "--exact", fixture, "--ignored", "--list"],
+            cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True,
+        )
+        matches = [line for line in listed.stdout.splitlines() if line.endswith(": test")]
+        assert matches == [f"{fixture}: test"], f"Expected exactly one ignored fixture: {fixture}; got {matches}"
+
+
 CLIPBOARD = re.compile(rb"\x1b\]52;c;([A-Za-z0-9+/=]+)\x1b\\")
 
 
-def check_screen(completed_read=False):
-    fixture = "completed_read_terminal_fixture" if completed_read else "blocked_tool_terminal_fixture"
+def check_screen(binary, completed_read=False):
+    selector = FIXTURES[0 if completed_read else 1]
+    fixture = selector.rsplit("::", 1)[1]
     with tempfile.TemporaryDirectory(prefix=".robbie-pty-", dir=ROOT) as directory:
         fifo = Path(directory) / "pipe"
         os.mkfifo(fifo)
@@ -45,7 +88,7 @@ def check_screen(completed_read=False):
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
         original = termios.tcgetattr(slave)
         child = subprocess.Popen(
-            [binaries[0], "--exact", f"fullscreen::tests::terminal::{fixture}", "--ignored", "--nocapture"],
+            [binary, "--exact", selector, "--ignored", "--nocapture"],
             cwd=ROOT, stdin=slave, stdout=slave, stderr=slave,
             env={**os.environ, "TERM": "xterm-256color", "ROBBIE_TEST_FIFO": str(fifo)},
         )
@@ -148,5 +191,18 @@ def check_screen(completed_read=False):
             os.close(slave)
 
 
-check_screen(completed_read=True)
-check_screen()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-discovery", action="store_true", help="verify Cargo target and exact fixture selectors without running PTY scenarios")
+    args = parser.parse_args()
+    binary = build_test_binary()
+    verify_fixture_selectors(binary)
+    if args.check_discovery:
+        print("PASS discovery: robbie-cli test binary and both exact ignored fixture selectors; PTY scenarios not run.")
+        return
+    check_screen(binary, completed_read=True)
+    check_screen(binary)
+
+
+if __name__ == "__main__":
+    main()

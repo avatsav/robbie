@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / ".githooks"
 EXPECTED = [
     "cargo fmt --all -- --check",
-    "cargo clippy --locked --all-targets --all-features -- -D warnings",
+    "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
 ]
 
 
