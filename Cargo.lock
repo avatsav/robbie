@@ -2123,13 +2123,16 @@ name = "robbie-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "crossterm",
  "dotenvy",
  "futures-util",
  "image",
  "libc",
+ "nix 0.31.3",
  "ratatui",
  "ratatui-image",
+ "regex",
  "robbie-core",
  "serde_json",
  "tempfile",

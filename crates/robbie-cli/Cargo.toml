@@ -30,3 +30,8 @@ libc.workspace = true
 [dev-dependencies]
 robbie-core = { path = "../robbie-core", features = ["test-support"] }
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+base64 = "0.22.1"
+nix = { version = "0.31.3", features = ["fs", "poll", "signal", "term"] }
+regex = "1.13.1"

@@ -1,8 +1,14 @@
 use super::*;
 
+mod pty;
+mod scenarios;
+
+const COMPLETED_FIXTURE: &str = "fullscreen::tests::terminal::completed_read_terminal_fixture";
+const BLOCKED_FIXTURE: &str = "fullscreen::tests::terminal::blocked_tool_terminal_fixture";
+
 #[cfg(unix)]
 #[test]
-#[ignore = "requires a PTY; run via tests/terminal/blocked_tool_exit.py"]
+#[ignore = "PTY child fixture; launched by terminal::scenarios"]
 fn completed_read_terminal_fixture() {
     crate::run_with_runtime(async {
             let terminal_state = TerminalState::capture();
@@ -47,7 +53,7 @@ fn completed_read_terminal_fixture() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "requires a PTY; run via tests/terminal/blocked_tool_exit.py"]
+#[ignore = "PTY child fixture; launched by terminal::scenarios"]
 fn blocked_tool_terminal_fixture() {
     crate::run_with_runtime(async {
         let path = std::env::var("ROBBIE_TEST_FIFO")?;

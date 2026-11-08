@@ -35,20 +35,15 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo check --locked -p robbie-core --features test-support
 cargo test --locked --workspace
 cargo test --locked --workspace --all-features
-python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-Verify Unix PTY target/fixture discovery without running terminal scenarios:
+Opt-in Unix PTY scenarios (no model calls or host clipboard writes):
 
 ```sh
-python3 tests/terminal/blocked_tool_exit.py --check-discovery
+cargo test --locked -p robbie-cli --bin robbie fullscreen::tests::terminal::scenarios:: -- --ignored --test-threads=1
 ```
 
-Optional Unix PTY check (known resize/Ctrl+C timeout):
-
-```sh
-python3 tests/terminal/blocked_tool_exit.py
-```
+Keep the focused filter: child fixtures must not be run directly.
 
 ## Environment variables
 

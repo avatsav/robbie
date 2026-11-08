@@ -4,7 +4,7 @@
 
 - Rust tests that need crate-private state stay under the owning crate's `src/`, behind `#[cfg(test)]`. Cross-module scenarios can also live here; Cargo still compiles them as unit tests.
 - Each crate's `tests/*.rs` is reserved for Cargo integration tests of an exposed library or executable interface. Expose production interfaces for real consumers, not merely to relocate tests.
-- `tests/system/` contains Python black-box tests of repository tooling. `tests/terminal/` contains the optional Unix PTY driver. These already test system/integration behavior; changing language is unnecessary.
+- Process-level terminal scenarios use Cargo and live with the fullscreen owner because they require private host fixtures. Do not expose production UI interfaces merely to place them in a crate's `tests/` directory.
 
 Frontend ownership matters:
 
@@ -16,6 +16,7 @@ Frontend ownership matters:
 | `crates/robbie-core/tests/session.rs` | External-consumer session/tool/activity/recording contract; requires `test-support`. |
 | `crates/robbie-cli/src/tests/configuration.rs` | CLI environment resolution and recording startup; subprocess fixtures isolate environment changes. |
 | `crates/robbie-cli/src/fullscreen/tests/` | Frontend orchestration, transcript, selection, and viewport behavior. |
+| `crates/robbie-cli/src/fullscreen/tests/terminal/` | Opt-in Unix PTY interaction, clipboard, resize, and terminal restoration; an ordinary test verifies exact child selectors. |
 | `crates/robbie-cli/src/fullscreen/tests/diagnostics/` | Frontend receipt/append/completion evidence through the real core/channel path; not proof of visible terminal pixels. |
 | `crates/robbie-core/src/diagnostics/tests/` | Journal storage, privacy, configuration, and failure handling. |
 
@@ -30,6 +31,4 @@ Frontend ownership matters:
 
 ## Checks and limits
 
-Commands are in [Development](development.md#checks). Use `--workspace` to include both crates; the default member is `robbie-cli`. `cargo test` does not discover Python tests. Python unittest discovery includes `tests/system/`; the terminal driver is invoked explicitly.
-
-The PTY driver retains its known resize/Ctrl+C timeout. Moving it does not fix that issue or establish terminal restoration as passing.
+Commands are in [Development](development.md#checks). Use `--workspace` to include both crates; the default member is `robbie-cli`. Ordinary runs verify child-fixture selectors but skip the two PTY scenarios. Use the focused opt-in filter, not an unfiltered `--ignored` run that could launch child fixtures directly.
