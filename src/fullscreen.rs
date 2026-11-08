@@ -46,6 +46,7 @@ struct App {
     history_area: Rect,
     visible_start: usize,
     rendered_rows: Vec<Line<'static>>,
+    rendered_width: Option<usize>,
     pending_copy: Option<String>,
     recorder: Option<Recorder>,
     ui_turn: Option<UiTurn>,
@@ -96,12 +97,29 @@ impl App {
         }
     }
 
-    fn rows(&mut self, width: usize) -> Vec<Line<'static>> {
+    fn update_rows(&mut self, width: usize) {
+        let appended_at = self.transcript.len();
         self.transcript.extend(self.content.take_output());
-        self.transcript
-            .iter()
-            .flat_map(|line| line.rows(width))
-            .collect()
+        if self.rendered_width != Some(width) {
+            self.rendered_rows = self
+                .transcript
+                .iter()
+                .flat_map(|line| line.rows(width))
+                .collect();
+            self.rendered_width = Some(width);
+        } else {
+            self.rendered_rows.extend(
+                self.transcript[appended_at..]
+                    .iter()
+                    .flat_map(|line| line.rows(width)),
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn rows(&mut self, width: usize) -> Vec<Line<'static>> {
+        self.update_rows(width);
+        self.rendered_rows.clone()
     }
 
     fn view(&mut self, frame: &mut Frame) {
@@ -113,7 +131,9 @@ impl App {
             ),
         ])
         .areas(frame.area());
-        let rows = self.rows(history.width as usize);
+        let previous_row_count = self.rendered_rows.len();
+        self.update_rows(history.width as usize);
+        let rows = &self.rendered_rows;
         if history != self.history_area {
             // Mouse coordinates may refer to different text after a resize.
             self.selection.clear();
@@ -121,7 +141,7 @@ impl App {
             // New model/tool output must not move the text under an active drag.
             self.scroll_back = self
                 .scroll_back
-                .saturating_add(rows.len().saturating_sub(self.rendered_rows.len()));
+                .saturating_add(rows.len().saturating_sub(previous_row_count));
         }
         let max_scroll = rows.len().saturating_sub(history.height as usize);
         self.scroll_back = self.scroll_back.min(max_scroll);
@@ -134,10 +154,9 @@ impl App {
             .collect::<Vec<_>>();
         frame.render_widget(Paragraph::new(visible), history);
         self.selection
-            .highlight(frame.buffer_mut(), history, start, &rows);
+            .highlight(frame.buffer_mut(), history, start, rows);
         self.history_area = history;
         self.visible_start = start;
-        self.rendered_rows = rows;
         self.content.view_live(frame, live);
     }
 
@@ -481,6 +500,32 @@ mod tests {
             source: "main",
             kind: EventKind::AssistantText(text.into(), None),
         });
+    }
+
+    #[test]
+    fn transcript_cache_reuses_existing_rows_on_ticks_and_appends_but_reflows_on_resize() {
+        let mut app = App::default();
+        assistant(&mut app, "**alpha beta gamma delta epsilon**");
+        app.update_rows(80);
+        let initial = app.rendered_rows.clone();
+        let allocation = app.rendered_rows[0].spans[0].content.as_ptr();
+        app.content.advance_tick();
+        app.update_rows(80);
+        assert_eq!(app.rendered_rows, initial);
+        assert_eq!(app.rendered_rows[0].spans[0].content.as_ptr(), allocation);
+        assistant(&mut app, "appended text");
+        app.update_rows(80);
+        assert_eq!(app.rendered_rows[0].spans[0].content.as_ptr(), allocation);
+        assert!(app.rendered_rows.len() > initial.len());
+        for width in [10, 80, 0, 10] {
+            app.update_rows(width);
+            let expected: Vec<_> = app
+                .transcript
+                .iter()
+                .flat_map(|line| line.rows(width))
+                .collect();
+            assert_eq!(app.rendered_rows, expected);
+        }
     }
 
     #[cfg(unix)]

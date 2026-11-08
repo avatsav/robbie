@@ -212,7 +212,7 @@ Each item should be a focused, validated commit. Keep behavior changes separate 
 - [x] Fix Unicode clipping, wrapping, and Backspace (grapheme-safe fragments/clipping/editing; cell-budget, styled Markdown, prompt, and input regressions).
 - [x] Extract the agent module and hide its state (private fields, constructor, explicit turn preparation; fixture-only test access).
 - [x] Pass an explicit workspace path (startup capture shared by tools/children, skill scanning, diagnostics, and footer monitoring; isolated workspace regressions).
-- [ ] Cache flattened transcript rows across animation redraws.
+- [x] Cache flattened transcript rows across animation redraws (append-only updates, width invalidation; allocation-reuse, append, resize, selection regressions).
 - [ ] Extract shared test support.
 - [ ] Move large inline test suites into colocated test files where useful.
 
