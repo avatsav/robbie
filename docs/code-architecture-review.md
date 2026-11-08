@@ -206,7 +206,7 @@ The known PTY anomaly was not rerun. No authenticated model calls were made. Thi
 Each item should be a focused, validated commit. Keep behavior changes separate from mechanical organization changes.
 
 - [x] Stop shell descendants on timeout/cancellation (Unix process-group guard; timeout and cancellation regressions).
-- [ ] Bound shell-output acquisition.
+- [x] Bound shell-output acquisition (concurrent pipe draining into fixed-size tails; storage and noisy-pipe regressions).
 - [ ] Bound file-read acquisition.
 - [ ] Reject structurally malformed response blocks before execution.
 - [ ] Fix Unicode clipping, wrapping, and Backspace.
