@@ -818,6 +818,42 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn structurally_invalid_blocks_reject_the_whole_reply_before_tool_execution() {
+        use crate::{Agent, ToolRegistry, events::EventKind};
+        macro_rules! response {
+            ($block:literal) => {
+                concat!(r#"{"content":[{"type":"tool_use","id":"valid","name":"bash","input":{"command":"printf should-not-run"}},"#, $block, "]}")
+            };
+        }
+        for body in [
+            response!("null"),
+            response!("42"),
+            response!("[]"),
+            response!("{}"),
+            response!(r#"{"type":42}"#),
+        ] {
+            let server = Server::new(vec![Reply::Http(200, "", body)]);
+            let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            let mut agent = Agent {
+                model: server.model(),
+                tools: ToolRegistry::new(),
+                events,
+                source: "main",
+                messages: Vec::new(),
+            };
+            assert!(
+                agent.run("malformed blocks").await.is_err(),
+                "accepted {body}"
+            );
+            assert_eq!(server.count(), 1);
+            assert_eq!(agent.messages.len(), 1);
+            while let Ok(event) = receiver.try_recv() {
+                assert!(!matches!(event.kind, EventKind::ToolStarted { .. }));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn retries_transient_statuses_even_with_non_json_error_bodies() {
         for status in [408, 429, 500, 502, 503, 504, 529] {
             let server = Server::new(vec![

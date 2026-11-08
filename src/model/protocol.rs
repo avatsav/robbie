@@ -90,14 +90,20 @@ impl Protocol for AnthropicMessages {
             .context("model response has no content blocks")?;
         let mut output = Vec::new();
         for block in blocks {
-            match block["type"].as_str() {
-                Some("text") => output.push(Output::Text(
+            let block_type = block
+                .as_object()
+                .context("content block is not an object")?
+                .get("type")
+                .and_then(Value::as_str)
+                .context("content block has no string type")?;
+            match block_type {
+                "text" => output.push(Output::Text(
                     block["text"]
                         .as_str()
                         .context("text block has no text")?
                         .to_owned(),
                 )),
-                Some("tool_use") => output.push(Output::ToolCall(ToolCall {
+                "tool_use" => output.push(Output::ToolCall(ToolCall {
                     id: block["id"]
                         .as_str()
                         .context("tool use has no ID")?
@@ -439,6 +445,13 @@ mod tests {
         for body in [
             json!({}),
             json!({"content": "wrong"}),
+            json!({"content": [null]}),
+            json!({"content": [42]}),
+            json!({"content": ["text"]}),
+            json!({"content": [[]]}),
+            json!({"content": [{}]}),
+            json!({"content": [{"type": null}]}),
+            json!({"content": [{"type": 42}]}),
             json!({"content": [{"type": "text"}]}),
             json!({"content": [{"type": "tool_use", "name": "bash", "input": {}}]}),
             json!({"content": [{"type": "tool_use", "id": "a", "input": {}}]}),
