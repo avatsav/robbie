@@ -214,6 +214,6 @@ Each item should be a focused, validated commit. Keep behavior changes separate 
 - [x] Pass an explicit workspace path (startup capture shared by tools/children, skill scanning, diagnostics, and footer monitoring; isolated workspace regressions).
 - [x] Cache flattened transcript rows across animation redraws (append-only updates, width invalidation; allocation-reuse, append, resize, selection regressions).
 - [x] Extract shared test support (HTTP server, journal queries, headless-agent factory; frontend no longer imports another module's tests).
-- [ ] Move large inline test suites into colocated test files where useful.
+- [x] Move large inline test suites into colocated test files (UI, fullscreen, model, diagnostics, Markdown); module identities and private unit-test access are unchanged.
 
 Keep the current overall design; strengthen these specific seams rather than adding more architectural layers.
