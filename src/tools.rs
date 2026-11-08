@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
-use tokio::process::Command;
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use crate::{diagnostics::tool::ToolContext, skills::SkillRegistry};
 
+mod bash;
 mod files;
 mod load_skill;
 mod sub_agent;
@@ -58,7 +59,7 @@ impl ToolRegistry {
             skills: Arc::clone(&skills),
         };
         registry.register(Box::new(load_skill::LoadSkill { skills }));
-        registry.register(Box::new(Bash));
+        registry.register(Box::new(bash::Bash));
         registry.register(Box::new(files::ReadFile));
         registry.register(Box::new(files::WriteFile));
         registry.register(Box::new(files::EditFile));
@@ -103,65 +104,6 @@ impl ToolRegistry {
         match self.tools.get_mut(name) {
             Some(tool) => tool.execute_in_context(input, parent).await,
             None => (format!("Unknown tool: {name}"), true),
-        }
-    }
-}
-
-struct Bash;
-
-#[async_trait]
-impl Tool for Bash {
-    fn name(&self) -> &'static str {
-        "bash"
-    }
-
-    fn schema(&self) -> Value {
-        json!({
-            "name": self.name(),
-            "description": "Run a shell command in the current workspace.",
-            "input_schema": {
-                "type": "object",
-                "properties": { "command": { "type": "string" } },
-                "required": ["command"]
-            }
-        })
-    }
-
-    async fn execute(&mut self, input: &Value) -> (String, bool) {
-        let Some(command) = input.get("command").and_then(Value::as_str) else {
-            return ("Missing or invalid command".to_string(), true);
-        };
-        let mut process = Command::new("sh");
-        process.arg("-c").arg(command).kill_on_drop(true);
-        match tokio::time::timeout(Duration::from_secs(120), process.output()).await {
-            Ok(Ok(output)) => {
-                let combined = [output.stdout, output.stderr].concat();
-                let text = String::from_utf8_lossy(&combined);
-                let text = text.trim();
-                // Keep the end of long command output: failures and summaries
-                // usually live there, and the UI previews this same tail.
-                let mut tail: Vec<_> = text.chars().rev().take(50_001).collect();
-                let truncated = tail.len() > 50_000;
-                tail.truncate(50_000);
-                let result: String = tail.into_iter().rev().collect();
-                let result = if result.is_empty() {
-                    "(no output)".to_string()
-                } else {
-                    result
-                };
-                let result = if truncated {
-                    format!("[earlier output truncated]\n{result}")
-                } else {
-                    result
-                };
-                let status = match output.status.code() {
-                    Some(code) => format!("[exit {code}]"),
-                    None => format!("[{}]", output.status),
-                };
-                (format!("{result}\n{status}"), !output.status.success())
-            }
-            Ok(Err(error)) => (format!("Could not run command: {error}"), true),
-            Err(_) => ("Command timed out after 120 seconds".to_string(), true),
         }
     }
 }
