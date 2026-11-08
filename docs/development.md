@@ -26,6 +26,13 @@ Press Ctrl+C to exit. Restart after changing environment variables.
 cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
+
+Optional Unix PTY check (known resize/Ctrl+C timeout):
+
+```sh
+python3 tests/terminal/blocked_tool_exit.py
 ```
 
 ## Environment variables

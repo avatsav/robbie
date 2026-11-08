@@ -211,3 +211,6 @@ impl Agent {
         self.system_prompt()
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests;

@@ -6,6 +6,10 @@ When starting or resuming work, read `.agents/docs/README.md` if present. It ind
 
 - Keep responses and documentation brief, direct, and actionable. Cut filler and repetition.
 
+## Tests
+
+When adding or reorganizing tests, follow [docs/testing.md](docs/testing.md) for ownership, fixture placement, and suite-size review conventions.
+
 ## Documentation
 
 - Order feature docs by supported scope, defaults/configuration, runtime behavior, then actionable limits. Omit sections that add no useful information.

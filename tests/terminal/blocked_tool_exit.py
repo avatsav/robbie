@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full-screen PTY regressions: python3 tests/blocked_tool_exit.py.
+"""Full-screen PTY regressions: python3 tests/terminal/blocked_tool_exit.py.
 
 No model calls. Exercise completed tool output and a real read_file blocked on a
 FIFO, including scrolling, drag-to-copy, resizing, and terminal restoration.
@@ -21,7 +21,7 @@ import termios
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 build = subprocess.run(
     ["cargo", "test", "--locked", "--no-run", "--message-format=json"],
     cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True,
@@ -45,7 +45,7 @@ def check_screen(completed_read=False):
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
         original = termios.tcgetattr(slave)
         child = subprocess.Popen(
-            [binaries[0], "--exact", f"fullscreen::tests::{fixture}", "--ignored", "--nocapture"],
+            [binaries[0], "--exact", f"fullscreen::tests::terminal::{fixture}", "--ignored", "--nocapture"],
             cwd=ROOT, stdin=slave, stdout=slave, stderr=slave,
             env={**os.environ, "TERM": "xterm-256color", "ROBBIE_TEST_FIFO": str(fifo)},
         )

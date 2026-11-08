@@ -32,9 +32,6 @@ use crate::{
 mod selection;
 use selection::Selection;
 
-#[cfg(all(test, unix))]
-mod diagnostics_tests;
-
 // UI state owns formatting/input; this screen owns the transcript and viewport.
 #[derive(Default)]
 struct App {
