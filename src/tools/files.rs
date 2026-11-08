@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::{BufReader, Read},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -45,6 +48,52 @@ fn required<'a>(input: &'a Value, name: &str) -> Result<&'a str> {
         .with_context(|| format!("missing or invalid {name}"))
 }
 
+const MAX_READ_CHARS: usize = 50_000;
+
+// Decode only the bounded prefix we return. BufReader limits read-ahead, even
+// for a file with no newlines; no line-sized allocation or full-file read.
+fn read_prefix(reader: impl Read, line_limit: Option<u64>) -> Result<String> {
+    let mut output = String::new();
+    if line_limit == Some(0) {
+        return Ok(output);
+    }
+    let mut reader = BufReader::new(reader);
+    let mut chars = 0;
+    let mut lines = 0;
+    loop {
+        let mut bytes = [0; 4];
+        let mut len = 0;
+        let ch = loop {
+            if reader.read(&mut bytes[len..len + 1])? == 0 {
+                if len != 0 {
+                    bail!("file prefix ends with incomplete UTF-8");
+                }
+                return Ok(output);
+            }
+            len += 1;
+            match std::str::from_utf8(&bytes[..len]) {
+                Ok(text) => break text.chars().next().expect("decoded a nonempty character"),
+                Err(error) if error.error_len().is_none() && len < bytes.len() => {}
+                Err(error) => return Err(error.into()),
+            }
+        };
+        // One decoded character of lookahead distinguishes exact-fit from
+        // truncated output. A reached line limit needs no further lookahead.
+        if chars == MAX_READ_CHARS {
+            output.push_str("\n[output truncated]");
+            return Ok(output);
+        }
+        output.push(ch);
+        chars += 1;
+        if ch == '\n' {
+            lines += 1;
+            if line_limit == Some(lines) {
+                return Ok(output);
+            }
+        }
+    }
+}
+
 fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
     let path = required(input, "path")?;
     if path.is_empty() {
@@ -53,25 +102,15 @@ fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
     match name {
         "read_file" => {
             let path = workspace_path(root, path, false)?;
-            let content = std::fs::read_to_string(path)?;
-            let limited = match input.get("limit") {
-                None => content,
-                Some(value) => {
-                    let limit = value
+            let limit = input
+                .get("limit")
+                .map(|value| {
+                    value
                         .as_u64()
-                        .context("limit must be a non-negative integer")?;
-                    content
-                        .split_inclusive('\n')
-                        .take(usize::try_from(limit).unwrap_or(usize::MAX))
-                        .collect()
-                }
-            };
-            let truncated = limited.chars().count() > 50_000;
-            let mut output: String = limited.chars().take(50_000).collect();
-            if truncated {
-                output.push_str("\n[output truncated]");
-            }
-            Ok(output)
+                        .context("limit must be a non-negative integer")
+                })
+                .transpose()?;
+            read_prefix(std::fs::File::open(path)?, limit)
         }
         "write_file" => {
             let content = required(input, "content")?;
@@ -170,6 +209,70 @@ impl Tool for EditFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Counted<R> {
+        reader: R,
+        bytes: usize,
+    }
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.reader.read(buffer)?;
+            self.bytes += read;
+            Ok(read)
+        }
+    }
+
+    #[test]
+    fn prefix_acquisition_is_bounded_even_without_newlines() {
+        let mut source = Counted {
+            reader: std::io::repeat(b'x'),
+            bytes: 0,
+        };
+        let output = read_prefix(&mut source, Some(1)).unwrap();
+        assert_eq!(
+            output,
+            format!("{}\n[output truncated]", "x".repeat(MAX_READ_CHARS))
+        );
+        assert!(source.bytes <= MAX_READ_CHARS + 1 + 8192);
+    }
+
+    #[test]
+    fn zero_and_short_line_limits_do_not_consume_the_whole_source() {
+        let mut source = Counted {
+            reader: std::io::repeat(b'\n'),
+            bytes: 0,
+        };
+        assert_eq!(read_prefix(&mut source, Some(0)).unwrap(), "");
+        assert_eq!(source.bytes, 0);
+        assert_eq!(read_prefix(&mut source, Some(2)).unwrap(), "\n\n");
+        assert!(source.bytes <= 8192);
+    }
+
+    #[test]
+    fn prefix_preserves_utf8_and_distinguishes_exact_fit_from_truncation() {
+        for text in ["", "é猫\nlast", "\n\n"] {
+            assert_eq!(read_prefix(text.as_bytes(), None).unwrap(), text);
+        }
+        let exact = "猫".repeat(MAX_READ_CHARS);
+        assert_eq!(read_prefix(exact.as_bytes(), None).unwrap(), exact);
+        let longer = format!("{exact}é");
+        assert_eq!(
+            read_prefix(longer.as_bytes(), None).unwrap(),
+            format!("{exact}\n[output truncated]")
+        );
+        assert_eq!(
+            read_prefix(b"one\ntwo\nthree".as_slice(), Some(2)).unwrap(),
+            "one\ntwo\n"
+        );
+        assert!(read_prefix(b"\xff".as_slice(), None).is_err());
+        assert!(read_prefix(b"\xc3".as_slice(), None).is_err());
+        // Only the returned prefix is decoded, not bytes beyond its line limit.
+        assert_eq!(
+            read_prefix(b"one\n\xff".as_slice(), Some(1)).unwrap(),
+            "one\n"
+        );
+    }
 
     #[cfg(unix)]
     #[test]

@@ -207,7 +207,7 @@ Each item should be a focused, validated commit. Keep behavior changes separate 
 
 - [x] Stop shell descendants on timeout/cancellation (Unix process-group guard; timeout and cancellation regressions).
 - [x] Bound shell-output acquisition (concurrent pipe draining into fixed-size tails; storage and noisy-pipe regressions).
-- [ ] Bound file-read acquisition.
+- [x] Bound file-read acquisition (fixed read-ahead, incremental UTF-8 prefix decoding, line/character limits; infinite-source and UTF-8 regressions).
 - [ ] Reject structurally malformed response blocks before execution.
 - [ ] Fix Unicode clipping, wrapping, and Backspace.
 - [ ] Extract the agent module and hide its state.
