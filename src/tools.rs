@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -34,16 +33,20 @@ trait Tool: Send + Sync {
 pub struct ToolRegistry {
     tools: HashMap<&'static str, Box<dyn Tool>>,
     skills: Arc<SkillRegistry>,
+    workspace: Arc<PathBuf>,
 }
 
 impl ToolRegistry {
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::with_skills(Arc::new(SkillRegistry::default()))
+        Self::with_skills(
+            Arc::new(SkillRegistry::default()),
+            std::env::current_dir().unwrap(),
+        )
     }
 
-    pub fn with_skills(skills: Arc<SkillRegistry>) -> Self {
-        let mut registry = Self::child(skills);
+    pub fn with_skills(skills: Arc<SkillRegistry>, workspace: PathBuf) -> Self {
+        let mut registry = Self::child(skills, Arc::new(workspace));
         registry.register(Box::new(todo::TodoTool::default()));
         registry
     }
@@ -53,16 +56,17 @@ impl ToolRegistry {
     }
 
     // Children can use workspace tools and skills, but cannot delegate recursively.
-    fn child(skills: Arc<SkillRegistry>) -> Self {
+    fn child(skills: Arc<SkillRegistry>, workspace: Arc<PathBuf>) -> Self {
         let mut registry = Self {
             tools: HashMap::new(),
             skills: Arc::clone(&skills),
+            workspace: Arc::clone(&workspace),
         };
         registry.register(Box::new(load_skill::LoadSkill { skills }));
-        registry.register(Box::new(bash::Bash));
-        registry.register(Box::new(files::ReadFile));
-        registry.register(Box::new(files::WriteFile));
-        registry.register(Box::new(files::EditFile));
+        registry.register(Box::new(bash::Bash(Arc::clone(&workspace))));
+        registry.register(Box::new(files::ReadFile(Arc::clone(&workspace))));
+        registry.register(Box::new(files::WriteFile(Arc::clone(&workspace))));
+        registry.register(Box::new(files::EditFile(workspace)));
         registry
     }
 
@@ -76,6 +80,7 @@ impl ToolRegistry {
             model,
             events,
             skills: Arc::clone(&self.skills),
+            workspace: Arc::clone(&self.workspace),
         }));
     }
 
@@ -111,6 +116,54 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn file_and_shell_tools_use_the_injected_workspace() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        for (root, text) in [(first.path(), "first"), (second.path(), "second")] {
+            let mut registry =
+                ToolRegistry::with_skills(Arc::new(SkillRegistry::default()), root.to_owned());
+            assert!(
+                !registry
+                    .execute(
+                        "write_file",
+                        &json!({"path":"injected-workspace", "content":text})
+                    )
+                    .await
+                    .1
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("injected-workspace")).unwrap(),
+                text
+            );
+            assert_eq!(
+                registry
+                    .execute("read_file", &json!({"path":"injected-workspace"}))
+                    .await,
+                (text.into(), false)
+            );
+            assert_eq!(
+                registry
+                    .execute("bash", &json!({"command":"cat injected-workspace"}))
+                    .await,
+                (format!("{text}\n[exit 0]"), false)
+            );
+            assert!(
+                !registry
+                    .execute(
+                        "edit_file",
+                        &json!({"path":"injected-workspace", "old_text":text, "new_text":"edited"})
+                    )
+                    .await
+                    .1
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("injected-workspace")).unwrap(),
+                "edited"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn registry_exposes_and_dispatches_bash() {

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
 use crossterm::{
@@ -306,12 +306,20 @@ pub async fn run(
     mut agent: Agent,
     mut receiver: UnboundedReceiver<AgentEvent>,
     recorder: Recorder,
+    workspace: PathBuf,
 ) -> Result<()> {
     let terminal_state = TerminalState::capture();
     let mut terminal = ratatui::init();
     let result = async {
         let _modes = ScreenModes::new()?;
-        run_app(&mut terminal, &mut agent, &mut receiver, &recorder).await
+        run_app(
+            &mut terminal,
+            &mut agent,
+            &mut receiver,
+            &recorder,
+            workspace,
+        )
+        .await
     }
     .await;
     // Restore the alternate screen on both normal return and error paths.
@@ -329,6 +337,7 @@ async fn run_app(
     agent: &mut Agent,
     receiver: &mut UnboundedReceiver<AgentEvent>,
     recorder: &Recorder,
+    directory: PathBuf,
 ) -> Result<()> {
     let mut app = App::new(agent.model_name());
     app.recorder = Some(recorder.clone());
@@ -339,7 +348,7 @@ async fn run_app(
     }
     // Capability probing owns stdin briefly, before EventStream starts reading.
     app.content.configure_mascot_graphics();
-    let mut workspace = ui::WorkspaceMonitor::start();
+    let mut workspace = ui::WorkspaceMonitor::start(directory);
     workspace.apply_current(&mut app.content);
     let mut keys = EventStream::new();
     loop {
@@ -511,7 +520,7 @@ mod tests {
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
-                let mut workspace = ui::WorkspaceMonitor::start();
+                let mut workspace = ui::WorkspaceMonitor::start(std::env::current_dir().unwrap());
                 let mut app = App::new("test/model");
                 workspace.apply_current(&mut app.content);
                 app.handle_event(Event::Paste("Read Cargo.toml and summarize dependencies".into()));
@@ -557,7 +566,7 @@ mod tests {
             let mut terminal = ratatui::init();
             let result = async {
                 let _modes = ScreenModes::new()?;
-                let mut workspace = ui::WorkspaceMonitor::start();
+                let mut workspace = ui::WorkspaceMonitor::start(std::env::current_dir().unwrap());
                 let mut app = App::default();
                 workspace.apply_current(&mut app.content);
                 assistant(

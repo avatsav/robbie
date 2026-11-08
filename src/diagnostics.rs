@@ -118,9 +118,9 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(model: &str) -> Self {
+    pub fn start(model: &str, workspace: &Path) -> Self {
         let journal = Config::from_env()
-            .and_then(|config| Journal::open(config, &env::current_dir()?))
+            .and_then(|config| Journal::open(config, workspace))
             .unwrap_or_else(|_| Journal::disabled());
         let recorder = Self {
             journal: Arc::new(Mutex::new(journal)),
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     #[ignore = "subprocess fixture for recorder configuration"]
     fn configured_start_fixture() {
-        let recorder = Recorder::start("fixture/model");
+        let recorder = Recorder::start("fixture/model", &env::current_dir().unwrap());
         recorder.session_context(|| TranscriptContext {
             system: "fixture sensitive system".into(),
             tools: vec![json!({"name": "fixture_tool"})],

@@ -45,7 +45,8 @@ async fn run() -> Result<()> {
     dotenvy::dotenv().ok();
     let prompt_cache =
         model::PromptCache::from_setting(std::env::var_os("ROBBIE_PROMPT_CACHE").as_deref())?;
-    let skills_directory = std::env::current_dir()?.join("skills");
+    let workspace = std::env::current_dir()?;
+    let skills_directory = workspace.join("skills");
     let skills = Arc::new(
         tokio::task::spawn_blocking(move || skills::SkillRegistry::scan(&skills_directory))
             .await
@@ -58,7 +59,7 @@ async fn run() -> Result<()> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let recorder = diagnostics::Recorder::start(&model_name);
+    let recorder = diagnostics::Recorder::start(&model_name, &workspace);
     let model = Arc::new(
         ModelClient::new(
             model::client()?,
@@ -69,10 +70,15 @@ async fn run() -> Result<()> {
         )
         .with_prompt_cache(prompt_cache),
     );
-    let mut agent = Agent::new(model, ToolRegistry::with_skills(skills), events, "main");
+    let mut agent = Agent::new(
+        model,
+        ToolRegistry::with_skills(skills, workspace.clone()),
+        events,
+        "main",
+    );
     agent.enable_sub_agent();
     recorder.session_context(|| agent.transcript_context());
-    fullscreen::run(agent, receiver, recorder).await
+    fullscreen::run(agent, receiver, recorder, workspace).await
 }
 
 #[cfg(test)]

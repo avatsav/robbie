@@ -211,7 +211,7 @@ Each item should be a focused, validated commit. Keep behavior changes separate 
 - [x] Reject structurally malformed response blocks before execution (decoder and real-agent HTTP regressions; unknown typed blocks remain lossless).
 - [x] Fix Unicode clipping, wrapping, and Backspace (grapheme-safe fragments/clipping/editing; cell-budget, styled Markdown, prompt, and input regressions).
 - [x] Extract the agent module and hide its state (private fields, constructor, explicit turn preparation; fixture-only test access).
-- [ ] Pass an explicit workspace path.
+- [x] Pass an explicit workspace path (startup capture shared by tools/children, skill scanning, diagnostics, and footer monitoring; isolated workspace regressions).
 - [ ] Cache flattened transcript rows across animation redraws.
 - [ ] Extract shared test support.
 - [ ] Move large inline test suites into colocated test files where useful.

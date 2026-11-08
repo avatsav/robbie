@@ -57,7 +57,7 @@ mod tests {
         )
         .unwrap();
         let skills = Arc::new(SkillRegistry::scan(root.path()).unwrap());
-        let mut registry = super::super::ToolRegistry::with_skills(skills);
+        let mut registry = super::super::ToolRegistry::with_skills(skills, root.path().to_owned());
         assert!(
             registry
                 .schemas()

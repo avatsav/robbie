@@ -1,6 +1,7 @@
 use std::{
     io::{BufReader, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
@@ -9,9 +10,9 @@ use serde_json::{Value, json};
 
 use super::Tool;
 
-pub(super) struct ReadFile;
-pub(super) struct WriteFile;
-pub(super) struct EditFile;
+pub(super) struct ReadFile(pub(super) Arc<PathBuf>);
+pub(super) struct WriteFile(pub(super) Arc<PathBuf>);
+pub(super) struct EditFile(pub(super) Arc<PathBuf>);
 
 // Existing paths (including symlinks) are resolved before checking the boundary.
 // For a new file, its parent must already exist inside the workspace.
@@ -137,14 +138,10 @@ fn run_file_tool(name: &str, input: &Value, root: &Path) -> Result<String> {
     }
 }
 
-async fn execute(name: &'static str, input: &Value) -> (String, bool) {
+async fn execute(name: &'static str, input: &Value, root: Arc<PathBuf>) -> (String, bool) {
     // The blocking task owns its input: it can outlive the async caller on exit.
     let input = input.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let root = std::env::current_dir().context("cannot find workspace")?;
-        run_file_tool(name, &input, &root)
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || run_file_tool(name, &input, &root)).await;
     match result {
         Ok(Ok(output)) => (output, false),
         Ok(Err(error)) => (format!("Error: {error:#}"), true),
@@ -166,7 +163,7 @@ impl Tool for ReadFile {
         })
     }
     async fn execute(&mut self, input: &Value) -> (String, bool) {
-        execute(self.name(), input).await
+        execute(self.name(), input, Arc::clone(&self.0)).await
     }
 }
 
@@ -184,7 +181,7 @@ impl Tool for WriteFile {
         })
     }
     async fn execute(&mut self, input: &Value) -> (String, bool) {
-        execute(self.name(), input).await
+        execute(self.name(), input, Arc::clone(&self.0)).await
     }
 }
 
@@ -202,7 +199,7 @@ impl Tool for EditFile {
         })
     }
     async fn execute(&mut self, input: &Value) -> (String, bool) {
-        execute(self.name(), input).await
+        execute(self.name(), input, Arc::clone(&self.0)).await
     }
 }
 
@@ -332,7 +329,7 @@ mod tests {
             std::fs::write(writer_path, "released").unwrap();
         });
         let input = json!({"path": fifo});
-        let mut tool = ReadFile;
+        let mut tool = ReadFile(Arc::new(root));
         let start = Instant::now();
         let heartbeat = async {
             tokio::time::sleep(Duration::from_millis(25)).await;

@@ -62,8 +62,7 @@ pub(crate) struct WorkspaceMonitor {
 }
 
 impl WorkspaceMonitor {
-    pub(crate) fn start() -> Self {
-        let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    pub(crate) fn start(directory: PathBuf) -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let (sender, receiver) = watch::channel(Workspace::at(&directory, home.as_deref()));
         let task = tokio::spawn(async move {
@@ -180,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_monitor_aborts_its_task() {
-        let monitor = WorkspaceMonitor::start();
+        let monitor = WorkspaceMonitor::start(std::env::current_dir().unwrap());
         let handle = monitor.task.abort_handle();
         drop(monitor);
         tokio::task::yield_now().await;

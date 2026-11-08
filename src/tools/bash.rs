@@ -1,7 +1,9 @@
 use std::{
     collections::VecDeque,
     io,
+    path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
+    sync::Arc,
     time::Duration,
 };
 
@@ -14,7 +16,7 @@ use tokio::{
 
 use super::Tool;
 
-pub(super) struct Bash;
+pub(super) struct Bash(pub(super) Arc<PathBuf>);
 
 const MAX_CHARS: usize = 50_000;
 // Four UTF-8 bytes per retained character, plus lookahead/boundary slack.
@@ -75,11 +77,12 @@ impl Drop for ProcessGroup {
     }
 }
 
-async fn run(command: &str, timeout: Duration) -> io::Result<Option<Captured>> {
+async fn run(command: &str, timeout: Duration, workspace: &Path) -> io::Result<Option<Captured>> {
     let mut process = Command::new("sh");
     process
         .arg("-c")
         .arg(command)
+        .current_dir(workspace)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -137,7 +140,7 @@ impl Tool for Bash {
         let Some(command) = input.get("command").and_then(Value::as_str) else {
             return ("Missing or invalid command".to_string(), true);
         };
-        match run(command, Duration::from_secs(120)).await {
+        match run(command, Duration::from_secs(120), &self.0).await {
             Ok(Some(output)) => {
                 let discarded = output.stdout.discarded || output.stderr.discarded;
                 // Preserve the existing stdout-then-stderr presentation; both
@@ -181,7 +184,9 @@ impl Tool for Bash {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::path::Path;
+    async fn run(command: &str, timeout: Duration) -> io::Result<Option<Captured>> {
+        super::run(command, timeout, Path::new(".")).await
+    }
 
     #[test]
     fn tail_storage_is_bounded_across_small_and_oversized_chunks() {

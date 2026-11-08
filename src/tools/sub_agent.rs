@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -11,13 +11,14 @@ pub(super) struct SubAgent {
     pub(super) model: Arc<crate::model::ModelClient>,
     pub(super) events: crate::events::EventSender,
     pub(super) skills: Arc<SkillRegistry>,
+    pub(super) workspace: Arc<PathBuf>,
 }
 
 impl SubAgent {
     fn new_child(&self) -> Agent {
         Agent::new(
             Arc::clone(&self.model),
-            ToolRegistry::child(Arc::clone(&self.skills)),
+            ToolRegistry::child(Arc::clone(&self.skills), Arc::clone(&self.workspace)),
             self.events.clone(),
             "subagent",
         )
@@ -83,7 +84,31 @@ mod tests {
             )),
             events,
             skills: Arc::new(SkillRegistry::default()),
+            workspace: Arc::new(std::env::current_dir().unwrap()),
         }
+    }
+
+    #[tokio::test]
+    async fn children_inherit_the_explicit_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("child-workspace"), "isolated").unwrap();
+        let mut tool = sub_agent();
+        tool.workspace = Arc::new(root.path().to_owned());
+        let mut child = tool.new_child();
+        assert_eq!(
+            child
+                .tools_for_test()
+                .execute("read_file", &json!({"path":"child-workspace"}))
+                .await,
+            ("isolated".into(), false)
+        );
+        assert_eq!(
+            child
+                .tools_for_test()
+                .execute("bash", &json!({"command":"cat child-workspace"}))
+                .await,
+            ("isolated\n[exit 0]".into(), false)
+        );
     }
 
     #[test]
@@ -139,7 +164,8 @@ mod tests {
             second.system_prompt_for_test()
         );
 
-        let mut parent = ToolRegistry::with_skills(Arc::clone(&tool.skills));
+        let mut parent =
+            ToolRegistry::with_skills(Arc::clone(&tool.skills), tool.workspace.as_ref().clone());
         parent.enable_sub_agent(Arc::clone(&tool.model), tool.events.clone());
         assert_eq!(
             parent.skill_descriptions(),
