@@ -1,31 +1,10 @@
 //! Controlled HTTP evidence; no authenticated model calls or user session files.
-use super::agent_diagnostics::agent;
 use super::*;
+use crate::test_support::{agent, events, log};
 use serde_json::json;
-use std::{fs, path::Path};
 
 const RESPONSE: &str = r#"{"id":"response-1","model":"served/model","stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":3},"content":[{"type":"text","text":"private assistant text"},{"type":"thinking","thinking":"private reasoning","signature":"private signature"},{"type":"future_private_tag","data":"private block"}]}"#;
 const EMPTY: &str = r#"{"id":"empty-response","stop_reason":"end_turn","content":[]}"#;
-
-pub(crate) fn log(root: &Path) -> Vec<Value> {
-    let paths: Vec<_> = fs::read_dir(root.join("robbie/sessions"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    assert_eq!(paths.len(), 1);
-    fs::read_to_string(&paths[0])
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-pub(crate) fn events<'a>(records: &'a [Value], event: &str) -> Vec<&'a Value> {
-    records
-        .iter()
-        .filter(|record| record["event"] == event)
-        .collect()
-}
 
 #[tokio::test]
 async fn success_records_metadata_and_opt_in_wire_bodies_without_headers() {

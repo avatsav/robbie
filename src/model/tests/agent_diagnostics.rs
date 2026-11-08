@@ -1,14 +1,7 @@
 //! Exercise the real agent loop, independently of frontend consumption.
-use super::diagnostics::{events, log};
 use super::*;
-use crate::{Agent, ToolRegistry};
+use crate::test_support::{agent, events, log};
 use serde_json::json;
-
-pub(super) fn agent(model: Arc<ModelClient>) -> Agent {
-    // Intentionally closed: handled text must not be mistaken for UI receipt.
-    let (events, _) = tokio::sync::mpsc::unbounded_channel();
-    Agent::new(model, ToolRegistry::new(), events, "main")
-}
 
 #[tokio::test]
 async fn turns_correlate_decisions_and_count_raw_text_not_rendered_cells() {

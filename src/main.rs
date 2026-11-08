@@ -10,6 +10,8 @@ mod markdown;
 mod model;
 mod skills;
 mod terminal_text;
+#[cfg(test)]
+mod test_support;
 mod tools;
 mod ui;
 use agent::Agent;

@@ -1,7 +1,6 @@
 //! Tool execution and real delegation evidence, without live provider calls.
-use super::agent_diagnostics::agent;
-use super::diagnostics::{events, log};
 use super::*;
+use crate::test_support::{agent, events, log};
 use serde_json::json;
 
 #[tokio::test]

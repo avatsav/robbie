@@ -4,10 +4,7 @@ use super::*;
 use crate::{
     ToolRegistry,
     diagnostics::agent::AgentTurn,
-    model::tests::{
-        Reply, Server,
-        diagnostics::{events, log},
-    },
+    test_support::{Reply, Server, events, log},
 };
 use ratatui::{Terminal, backend::TestBackend};
 use serde_json::Value;
