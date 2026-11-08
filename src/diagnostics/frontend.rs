@@ -3,32 +3,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use super::{Content, Recorder, model::RequestOrigin};
-
-#[derive(Clone, Copy, Debug, Serialize)]
-pub struct TextContext {
-    #[serde(flatten)]
-    origin: RequestOrigin,
-    request_id: u64,
-    text_sequence: usize,
-}
-
-impl TextContext {
-    pub(super) fn new(origin: RequestOrigin, request_id: u64, text_sequence: usize) -> Self {
-        Self {
-            origin,
-            request_id,
-            text_sequence,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Delivery {
-    Enqueued,
-    ReceiverClosed,
-}
+use super::{Content, Recorder, activity::TextContext, model::RequestOrigin};
 
 // Returned only after the UI inserts the sanitized Markdown source into its
 // pending transcript state. Counts do not describe rendered cells.
@@ -41,31 +16,29 @@ pub struct TextAppend {
 #[derive(Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 enum Event<'a> {
-    AgentTextEmitted {
-        #[serde(flatten)]
-        context: TextContext,
-        raw_bytes: usize,
-        delivery: Delivery,
-    },
-    UiTurnStarted {
+    #[serde(rename = "ui_turn_started")]
+    TurnStarted {
         #[serde(flatten)]
         origin: RequestOrigin,
         submitted_bytes: usize,
     },
-    UiTextReceived {
+    #[serde(rename = "ui_text_received")]
+    TextReceived {
         ui_turn: RequestOrigin,
         #[serde(flatten)]
         context: TextContext,
         raw_bytes: usize,
     },
-    UiTextAppended {
+    #[serde(rename = "ui_text_appended")]
+    TextAppended {
         ui_turn: RequestOrigin,
         #[serde(flatten)]
         context: TextContext,
         sanitized_bytes: usize,
         non_whitespace_chars: usize,
     },
-    UiTurnFinished {
+    #[serde(rename = "ui_turn_finished")]
+    TurnFinished {
         #[serde(flatten)]
         origin: RequestOrigin,
         elapsed_ms: u128,
@@ -101,21 +74,6 @@ struct UiTotals {
 }
 
 impl Recorder {
-    pub(super) fn text_emitted(&self, context: TextContext, text: &str, enqueued: bool) {
-        self.record(
-            Event::AgentTextEmitted {
-                context,
-                raw_bytes: text.len(),
-                delivery: if enqueued {
-                    Delivery::Enqueued
-                } else {
-                    Delivery::ReceiverClosed
-                },
-            },
-            || None,
-        );
-    }
-
     pub fn ui_turn(&self, origin: RequestOrigin, prompt: &str) -> UiTurn {
         let turn = UiTurn {
             recorder: self.clone(),
@@ -125,7 +83,7 @@ impl Recorder {
             finished: false,
         };
         self.record(
-            Event::UiTurnStarted {
+            Event::TurnStarted {
                 origin,
                 submitted_bytes: prompt.len(),
             },
@@ -157,7 +115,7 @@ impl UiTurn {
         counts.received_blocks += 1;
         counts.received_bytes += text.len();
         self.recorder.record(
-            Event::UiTextReceived {
+            Event::TextReceived {
                 ui_turn: self.origin,
                 context,
                 raw_bytes: text.len(),
@@ -172,7 +130,7 @@ impl UiTurn {
         counts.sanitized_bytes += append.sanitized_bytes;
         counts.non_whitespace_chars += append.non_whitespace_chars;
         self.recorder.record(
-            Event::UiTextAppended {
+            Event::TextAppended {
                 ui_turn: self.origin,
                 context: append.context,
                 sanitized_bytes: append.sanitized_bytes,
@@ -192,7 +150,7 @@ impl UiTurn {
         }
         self.finished = true;
         self.recorder.record(
-            Event::UiTurnFinished {
+            Event::TurnFinished {
                 origin: self.origin,
                 elapsed_ms: self.started.elapsed().as_millis(),
                 end,

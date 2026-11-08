@@ -1,4 +1,4 @@
-use crate::diagnostics::frontend::TextContext;
+use crate::diagnostics::activity::TextContext;
 use serde_json::Value;
 use tokio::sync::mpsc;
 

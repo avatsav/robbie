@@ -17,6 +17,7 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 
+pub mod activity;
 pub mod agent;
 pub mod frontend;
 pub mod model;

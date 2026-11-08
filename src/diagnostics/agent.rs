@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::{
     Recorder,
-    frontend::TextContext,
+    activity::TextContext,
     model::RequestOrigin,
     tool::{ToolContext, ToolExecution},
 };
