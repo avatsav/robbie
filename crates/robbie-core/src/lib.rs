@@ -7,6 +7,7 @@ mod model;
 mod session;
 mod skills;
 mod tools;
+mod usage;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -17,6 +18,7 @@ pub use session::{
     FrontendEnd, FrontendTurn, ModelSettings, PreparedTurn, PromptCache, Recording,
     RecordingSettings, Session, SessionConfig, TextAppend,
 };
+pub use usage::{ContextUsage, TokenTotal, UsageSnapshot, UsageTotals};
 
 #[cfg(test)]
 use agent::Agent;

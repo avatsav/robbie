@@ -13,9 +13,16 @@ use crate::{
     events::{AgentEvent, EventKind, EventSender},
     model::{self, Message, ModelClient, Output, ToolResult},
     tools::ToolRegistry,
+    usage::{ContextUsage, UsageSnapshot},
 };
 
 const SYSTEM: &str = "You are a coding agent. Use tools to inspect and change the workspace. Load relevant skills before acting, then report clearly.";
+
+#[derive(Clone, Copy)]
+struct ContextBaseline {
+    tokens: u64,
+    messages: usize,
+}
 
 pub(crate) struct Agent {
     model: Arc<ModelClient>,
@@ -26,6 +33,7 @@ pub(crate) struct Agent {
     // must repair incomplete exchanges without blindly replaying side effects.
     messages: Vec<Message>,
     previous_summary: Option<String>,
+    context_baseline: Option<ContextBaseline>,
 }
 
 impl Agent {
@@ -42,11 +50,26 @@ impl Agent {
             source,
             messages: Vec::new(),
             previous_summary: None,
+            context_baseline: None,
         }
     }
 
     pub(crate) fn model_name(&self) -> &str {
         self.model.model_name()
+    }
+
+    pub(crate) fn statistics(&self) -> UsageSnapshot {
+        UsageSnapshot {
+            totals: self.model.usage_totals(),
+            context: self.context_baseline.map(|baseline| ContextUsage {
+                reported_tokens: baseline.tokens,
+                trailing_messages: self.messages.len().saturating_sub(baseline.messages),
+            }),
+        }
+    }
+
+    fn publish_statistics(&self) {
+        self.emit(EventKind::UsageUpdated(self.statistics()));
     }
 
     pub(crate) fn enable_sub_agent(&mut self) {
@@ -69,14 +92,22 @@ impl Agent {
         &mut self,
         options: compaction::Options,
     ) -> Result<compaction::Outcome> {
-        compaction::compact(
+        let before = self.statistics();
+        let result = compaction::compact(
             &self.model,
             self.source,
             &mut self.messages,
             &mut self.previous_summary,
             options,
         )
-        .await
+        .await;
+        if matches!(result, Ok(compaction::Outcome::Compacted { .. })) {
+            self.context_baseline = None;
+        }
+        if self.statistics() != before {
+            self.publish_statistics();
+        }
+        result
     }
 
     async fn complete_model(&self, origin: RequestOrigin) -> Result<model::Completion> {
@@ -141,15 +172,26 @@ impl Agent {
             self.emit(EventKind::ModelStarted);
             // Only ModelClient retries HTTP. History changes and tool execution
             // stay outside it, for parent and child alike.
-            let model::Completion { reply, request_id } =
-                match self.complete_model(turn.model_call()).await {
-                    Ok(completion) => completion,
-                    Err(error) => {
-                        turn.finish(TurnEnd::ModelFailed);
-                        return Err(error);
-                    }
-                };
+            let model::Completion {
+                reply,
+                request_id,
+                usage,
+            } = match self.complete_model(turn.model_call()).await {
+                Ok(completion) => completion,
+                Err(error) => {
+                    self.publish_statistics();
+                    turn.finish(TurnEnd::ModelFailed);
+                    return Err(error);
+                }
+            };
             self.messages.push(Message::Assistant(reply.clone()));
+            if let Some(tokens) = usage.context_tokens() {
+                self.context_baseline = Some(ContextBaseline {
+                    tokens,
+                    messages: self.messages.len(),
+                });
+            }
+            self.publish_statistics();
             let mut results = Vec::new();
             for output in &reply.output {
                 match output {
@@ -202,6 +244,7 @@ impl Agent {
                 results.len(),
             );
             self.messages.push(Message::ToolResults(results));
+            self.publish_statistics();
         }
     }
 

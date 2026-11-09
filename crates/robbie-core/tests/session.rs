@@ -2,6 +2,8 @@
 
 #[path = "session/compaction.rs"]
 mod compaction;
+#[path = "session/usage.rs"]
+mod usage;
 
 use robbie_core::{
     CapturePolicy, EventKind, FrontendEnd, ModelSettings, PromptCache, RecordingSettings,

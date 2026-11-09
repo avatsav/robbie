@@ -37,9 +37,13 @@ async fn public_compaction_changes_later_parent_requests_but_children_stay_fresh
         }
     );
     assert_eq!(server.count(), 3);
+    assert!(matches!(
+        activity.try_recv().unwrap().kind,
+        EventKind::UsageUpdated(_)
+    ));
     assert!(
         activity.try_recv().is_err(),
-        "a summary is not user-facing assistant text"
+        "a summary emits statistics, not assistant text"
     );
     assert_eq!(
         session.prepare_turn().run("DELEGATE_NEXT").await.unwrap(),

@@ -20,6 +20,7 @@ use crate::diagnostics::{
     },
     tool::ToolContext,
 };
+use crate::usage::{ReportedUsage, UsageLedger, UsageTotals};
 
 mod conversation;
 mod http_error;
@@ -48,12 +49,14 @@ pub struct ModelClient {
     prompt_cache: PromptCache,
     model: String,
     recorder: Recorder,
+    usage: UsageLedger,
 }
 
 // Local correlation belongs to the exchange, not protocol continuation/history.
 pub struct Completion {
     pub reply: Reply,
     pub request_id: u64,
+    pub(crate) usage: ReportedUsage,
 }
 
 // Exchange-only facts for callers that need acceptance checks. Neither this
@@ -78,6 +81,7 @@ impl ModelClient {
             prompt_cache: PromptCache::default(),
             model,
             recorder,
+            usage: UsageLedger::default(),
         }
     }
 
@@ -89,6 +93,10 @@ impl ModelClient {
 
     pub fn model_name(&self) -> &str {
         &self.model
+    }
+
+    pub fn usage_totals(&self) -> UsageTotals {
+        self.usage.snapshot()
     }
 
     pub fn agent_turn(&self, source: &'static str, parent: Option<ToolContext>) -> AgentTurn {
@@ -202,6 +210,10 @@ impl ModelClient {
         // Preserve available facts even if executable-block validation fails.
         // Metadata stays out of history and never authorizes tool execution.
         let metadata = self.protocol.response_metadata(&body);
+        let usage = self.protocol.reported_usage(&metadata);
+        // Account once outside the transport retry loop, even if reply validation
+        // fails. Unreceived bodies/invalid JSON cannot supply invented usage.
+        self.usage.record(usage);
         trace.response(&metadata);
         match self.protocol.decode(body) {
             Ok(reply) => {
@@ -210,6 +222,7 @@ impl ModelClient {
                     completion: Completion {
                         reply,
                         request_id: trace.id(),
+                        usage,
                     },
                     metadata,
                 })

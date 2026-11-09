@@ -31,6 +31,24 @@ pub trait Protocol {
 pub struct AnthropicMessages;
 
 impl AnthropicMessages {
+    /// Messages input is uncached, unlike Chat's total prompt count. Cache writes
+    /// use the aggregate field, never aggregate + TTL breakdown. Missing is unknown.
+    /// Contract: https://platform.claude.com/docs/en/build-with-claude/prompt-caching#tracking-cache-performance
+    pub(super) fn reported_usage(
+        &self,
+        metadata: &ResponseMetadata,
+    ) -> crate::usage::ReportedUsage {
+        let Some(usage) = &metadata.usage else {
+            return crate::usage::ReportedUsage::default();
+        };
+        crate::usage::ReportedUsage {
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_read: usage.cache_read_input_tokens,
+            cache_write: usage.cache_creation_input_tokens,
+        }
+    }
+
     /// A chars/4 wire-size heuristic, including opaque continuation. This is
     /// neither exact tokenization nor a bound on the complete model request.
     pub(super) fn estimate_message_tokens(&self, message: &Message) -> usize {
@@ -317,6 +335,8 @@ fn mark_cache_block(block: &mut Value, slots: &mut usize) {
 mod context_tests;
 #[cfg(test)]
 mod prompt_cache_tests;
+#[cfg(test)]
+mod usage_tests;
 
 #[cfg(test)]
 mod tests {

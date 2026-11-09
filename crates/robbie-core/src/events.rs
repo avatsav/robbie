@@ -11,6 +11,9 @@ pub struct AgentEvent {
 
 #[derive(Debug)]
 pub enum EventKind {
+    /// Session totals plus the emitting conversation's reported context baseline.
+    /// Observational only: never assistant text or a signal to start a turn.
+    UsageUpdated(crate::UsageSnapshot),
     ModelStarted,
     // Real agent text always carries immutable correlation. None permits
     // unrecorded frontend fixtures without inventing model/turn identities.

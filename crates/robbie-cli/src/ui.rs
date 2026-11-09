@@ -214,9 +214,14 @@ impl App {
 
     pub(super) fn activity(&mut self, event: AgentEvent) -> ActivityReceipt {
         let mut receipt = ActivityReceipt { assistant: None };
-        self.working = true;
+        if !matches!(&event.kind, EventKind::UsageUpdated(_)) {
+            self.working = true;
+        }
         let source = event.source;
         match event.kind {
+            // Statistics rendering is the next slice. Receiving them must not
+            // change working/mascot state or create transcript output.
+            EventKind::UsageUpdated(_) => return receipt,
             EventKind::ModelStarted => {}
             EventKind::AssistantText(text, context) => {
                 if self.needs_text_separator {

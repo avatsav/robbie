@@ -129,6 +129,13 @@ impl Session {
         self.recording.clone()
     }
 
+    /// Session-wide reported totals and the root conversation's latest baseline.
+    /// While a prepared/running turn borrows this session, consume UsageUpdated
+    /// activities instead. Neither path depends on diagnostics recording.
+    pub fn statistics(&self) -> crate::UsageSnapshot {
+        self.agent.statistics()
+    }
+
     /// Explicitly compact this conversation while no turn borrows the session.
     /// Limits are caller-supplied. Recent-size/shrink estimates use serialized
     /// message characters / 4; they do not guarantee model-window fit. A commit

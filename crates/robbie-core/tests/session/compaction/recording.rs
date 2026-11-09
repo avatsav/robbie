@@ -13,6 +13,10 @@ async fn compaction_lifecycle_is_metadata_only_and_does_not_invent_agent_or_fron
     seed(&mut session).await;
     while activities.try_recv().is_ok() {}
     session.compact(options()).await.unwrap();
+    assert!(matches!(
+        activities.try_recv().unwrap().kind,
+        EventKind::UsageUpdated(_)
+    ));
     assert!(activities.try_recv().is_err());
 
     let records = log(&root.path().join("state"));
