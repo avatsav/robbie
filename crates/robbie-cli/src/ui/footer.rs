@@ -165,13 +165,15 @@ impl App {
                 Line::from(format!("{path}{suffix}")).fg(MUTED_TEXT),
                 Rect::new(area.x, y, area.width, 1),
             );
-            let model = single_line(&self.model, area.width as usize);
-            if !model.is_empty() {
-                frame.render_widget(
-                    Line::from(model).fg(MUTED_TEXT),
-                    Rect::new(area.x, y + 1, area.width, 1),
-                );
-            }
+            frame.render_widget(
+                Line::from(super::usage::row(
+                    self.statistics,
+                    &self.model,
+                    area.width as usize,
+                ))
+                .fg(MUTED_TEXT),
+                Rect::new(area.x, y + 1, area.width, 1),
+            );
         }
     }
 }
@@ -260,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_shows_context_and_model_without_mode_hint_or_metrics() {
+    fn footer_shows_directory_usage_and_right_aligned_model() {
         let app = App {
             model: "test/model".into(),
             workspace: Workspace {
@@ -279,7 +281,8 @@ mod tests {
         assert_eq!(rows[0], "─".repeat(80));
         assert_eq!(rows[2], "─".repeat(80));
         assert!(rows[3].starts_with("~/project (main)"));
-        assert_eq!(rows[4].trim_end(), "test/model");
+        assert!(rows[4].starts_with("↑0 ↓0 R0 W0 ctx ?"));
+        assert!(rows[4].ends_with("test/model"));
         assert!(!text.contains("Ctrl+O"));
         for unwanted in ["pi-lens", "tokens", "context", "LSP"] {
             assert!(!text.contains(unwanted));

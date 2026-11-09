@@ -20,6 +20,7 @@ use crate::{
 mod footer;
 mod mascot;
 mod tool_display;
+mod usage;
 mod workspace;
 
 pub(super) use mascot::TICK as ANIMATION_TICK;
@@ -135,6 +136,7 @@ pub(super) struct App {
     pending: Vec<OutputLine>,
     working: bool,
     model: String,
+    statistics: crate::session::UsageSnapshot,
     workspace: workspace::Workspace,
     tick: usize,
     mascot: mascot::Mascot,
@@ -219,9 +221,13 @@ impl App {
         }
         let source = event.source;
         match event.kind {
-            // Statistics rendering is the next slice. Receiving them must not
-            // change working/mascot state or create transcript output.
-            EventKind::UsageUpdated(_) => return receipt,
+            EventKind::UsageUpdated(snapshot) => {
+                self.statistics.totals = snapshot.totals;
+                if source == "main" {
+                    self.statistics.context = snapshot.context;
+                }
+                return receipt;
+            }
             EventKind::ModelStarted => {}
             EventKind::AssistantText(text, context) => {
                 if self.needs_text_separator {

@@ -353,6 +353,10 @@ async fn run_app(
     directory: PathBuf,
 ) -> Result<()> {
     let mut app = App::new(session.model_name());
+    app.content.activity(AgentEvent {
+        source: "main",
+        kind: EventKind::UsageUpdated(session.statistics()),
+    });
     app.recorder = Some(recorder.clone());
     if let Some(warning) = recorder.take_warning() {
         app.content.notice(format!("[warning] {warning}"));
