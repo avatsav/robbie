@@ -14,6 +14,8 @@ pub struct RequestOrigin {
     source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     turn_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compaction_id: Option<u64>,
 }
 
 impl RequestOrigin {
@@ -21,7 +23,13 @@ impl RequestOrigin {
         Self {
             source,
             turn_id: Some(turn_id),
+            compaction_id: None,
         }
+    }
+
+    pub(super) fn in_compaction(mut self, compaction_id: u64) -> Self {
+        self.compaction_id = Some(compaction_id);
+        self
     }
 }
 
@@ -30,6 +38,7 @@ impl From<&'static str> for RequestOrigin {
         Self {
             source,
             turn_id: None,
+            compaction_id: None,
         }
     }
 }

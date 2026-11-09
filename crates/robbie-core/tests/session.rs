@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "session/compaction.rs"]
+mod compaction;
+
 use robbie_core::{
     CapturePolicy, EventKind, FrontendEnd, ModelSettings, PromptCache, RecordingSettings,
     SessionConfig, TextAppend, TextContext,

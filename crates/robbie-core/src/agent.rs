@@ -7,6 +7,7 @@ use crate::{
     diagnostics::{
         TranscriptContext,
         agent::{AgentTurn, Decision, TurnEnd},
+        model::RequestOrigin,
         tool::ToolContext,
     },
     events::{AgentEvent, EventKind, EventSender},
@@ -24,6 +25,7 @@ pub(crate) struct Agent {
     // Keep complete assistant blocks, including tool-use IDs. Future persistence
     // must repair incomplete exchanges without blindly replaying side effects.
     messages: Vec<Message>,
+    previous_summary: Option<String>,
 }
 
 impl Agent {
@@ -39,6 +41,7 @@ impl Agent {
             events,
             source,
             messages: Vec::new(),
+            previous_summary: None,
         }
     }
 
@@ -60,6 +63,37 @@ impl Agent {
 
     pub(crate) fn prepare_turn(&self, parent: Option<ToolContext>) -> AgentTurn {
         self.model.agent_turn(self.source, parent)
+    }
+
+    pub(crate) async fn compact(
+        &mut self,
+        options: compaction::Options,
+    ) -> Result<compaction::Outcome> {
+        compaction::compact(
+            &self.model,
+            self.source,
+            &mut self.messages,
+            &mut self.previous_summary,
+            options,
+        )
+        .await
+    }
+
+    async fn complete_model(&self, origin: RequestOrigin) -> Result<model::Completion> {
+        let system = self.system_prompt();
+        let tools = self.tools.schemas();
+        match self.previous_summary.as_deref() {
+            Some(summary) => {
+                self.model
+                    .complete_with_summary(origin, &system, summary, &self.messages, &tools)
+                    .await
+            }
+            None => {
+                self.model
+                    .complete(origin, &system, &self.messages, &tools)
+                    .await
+            }
+        }
     }
 
     fn system_prompt(&self) -> String {
@@ -105,24 +139,16 @@ impl Agent {
         self.messages.push(Message::User(prompt.to_owned()));
         loop {
             self.emit(EventKind::ModelStarted);
-            // Only complete() retries HTTP. History changes and tool execution
+            // Only ModelClient retries HTTP. History changes and tool execution
             // stay outside it, for parent and child alike.
-            let model::Completion { reply, request_id } = match self
-                .model
-                .complete(
-                    turn.model_call(),
-                    &self.system_prompt(),
-                    &self.messages,
-                    &self.tools.schemas(),
-                )
-                .await
-            {
-                Ok(completion) => completion,
-                Err(error) => {
-                    turn.finish(TurnEnd::ModelFailed);
-                    return Err(error);
-                }
-            };
+            let model::Completion { reply, request_id } =
+                match self.complete_model(turn.model_call()).await {
+                    Ok(completion) => completion,
+                    Err(error) => {
+                        turn.finish(TurnEnd::ModelFailed);
+                        return Err(error);
+                    }
+                };
             self.messages.push(Message::Assistant(reply.clone()));
             let mut results = Vec::new();
             for output in &reply.output {
@@ -211,6 +237,8 @@ impl Agent {
         self.system_prompt()
     }
 }
+
+pub(crate) mod compaction;
 
 #[cfg(all(test, unix))]
 mod tests;

@@ -13,9 +13,9 @@ pub mod test_support;
 
 pub use diagnostics::activity::TextContext;
 pub use session::{
-    ActivityReceiver, AgentEvent, CapturePolicy, EventKind, FrontendEnd, FrontendTurn,
-    ModelSettings, PreparedTurn, PromptCache, Recording, RecordingSettings, Session, SessionConfig,
-    TextAppend,
+    ActivityReceiver, AgentEvent, CapturePolicy, CompactionOptions, CompactionOutcome, EventKind,
+    FrontendEnd, FrontendTurn, ModelSettings, PreparedTurn, PromptCache, Recording,
+    RecordingSettings, Session, SessionConfig, TextAppend,
 };
 
 #[cfg(test)]

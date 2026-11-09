@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::diagnostics::{
     Recorder,
     agent::AgentTurn,
+    compaction::Compaction,
     model::{
         AttemptOutcome, ModelRequest, RequestOrigin, RequestOutcome, RetrySource, RetryStop,
         TransportFailure,
@@ -27,11 +28,14 @@ mod prompt_cache;
 mod protocol;
 mod provider;
 
+pub(crate) use conversation::summary_message;
 pub use conversation::{Message, Output, Reply, ToolCall, ToolResult};
 pub use http_error::HttpErrorMetadata;
 use http_error::{HttpError, RetryAfter};
 pub use metadata::ResponseMetadata;
+pub(crate) use metadata::StopReason;
 pub use prompt_cache::PromptCache;
+use protocol::EncodedRequest;
 pub use protocol::{AnthropicMessages, Protocol};
 pub use provider::{OpenRouter, Provider};
 
@@ -50,6 +54,13 @@ pub struct ModelClient {
 pub struct Completion {
     pub reply: Reply,
     pub request_id: u64,
+}
+
+// Exchange-only facts for callers that need acceptance checks. Neither this
+// envelope nor its metadata belongs in protocol history.
+pub(crate) struct CompletionWithMetadata {
+    pub completion: Completion,
+    pub metadata: ResponseMetadata,
 }
 
 impl ModelClient {
@@ -84,6 +95,42 @@ impl ModelClient {
         self.recorder.agent_turn(source, parent)
     }
 
+    pub fn compaction_span(
+        &self,
+        source: &'static str,
+        raw_messages: usize,
+        had_previous_summary: bool,
+    ) -> Compaction {
+        self.recorder
+            .compaction(source.into(), raw_messages, had_previous_summary)
+    }
+
+    pub fn estimate_message_tokens(&self, message: &Message) -> usize {
+        self.protocol.estimate_message_tokens(message)
+    }
+
+    pub async fn complete_with_summary(
+        &self,
+        origin: impl Into<RequestOrigin>,
+        system: &str,
+        summary: &str,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> Result<Completion> {
+        let encoded = self.protocol.encode_with_summary(
+            &self.model,
+            system,
+            summary,
+            messages,
+            tools,
+            self.prompt_cache,
+        );
+        Ok(self
+            .complete_encoded(origin, encoded, Policy::default())
+            .await?
+            .completion)
+    }
+
     pub async fn complete(
         &self,
         origin: impl Into<RequestOrigin>,
@@ -106,6 +153,38 @@ impl ModelClient {
         let encoded = self
             .protocol
             .encode(&self.model, system, messages, tools, self.prompt_cache);
+        let CompletionWithMetadata {
+            completion,
+            metadata: _metadata,
+        } = self.complete_encoded(origin, encoded, policy).await?;
+        // Ordinary agent stopping policy is unchanged; it does not inspect stops.
+        Ok(completion)
+    }
+
+    pub(crate) async fn complete_summary(
+        &self,
+        origin: impl Into<RequestOrigin>,
+        prompt: String,
+        max_output_tokens: u32,
+    ) -> Result<CompletionWithMetadata> {
+        anyhow::ensure!(
+            max_output_tokens > 0,
+            "summary output limit must be positive"
+        );
+        let encoded = self
+            .protocol
+            .encode_summary(&self.model, &prompt, max_output_tokens);
+        drop(prompt);
+        self.complete_encoded(origin, encoded, Policy::default())
+            .await
+    }
+
+    async fn complete_encoded(
+        &self,
+        origin: impl Into<RequestOrigin>,
+        encoded: EncodedRequest,
+        policy: Policy,
+    ) -> Result<CompletionWithMetadata> {
         let prepared = self.provider.prepare(&self.http, encoded)?;
         let mut trace = self
             .recorder
@@ -122,13 +201,17 @@ impl ModelClient {
         };
         // Preserve available facts even if executable-block validation fails.
         // Metadata stays out of history and never authorizes tool execution.
-        trace.response(&self.protocol.response_metadata(&body));
+        let metadata = self.protocol.response_metadata(&body);
+        trace.response(&metadata);
         match self.protocol.decode(body) {
             Ok(reply) => {
                 trace.finish(RequestOutcome::Succeeded);
-                Ok(Completion {
-                    reply,
-                    request_id: trace.id(),
+                Ok(CompletionWithMetadata {
+                    completion: Completion {
+                        reply,
+                        request_id: trace.id(),
+                    },
+                    metadata,
                 })
             }
             Err(error) => {

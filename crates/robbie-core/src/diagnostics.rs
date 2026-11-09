@@ -18,6 +18,7 @@ use serde_json::Value;
 
 pub mod activity;
 pub mod agent;
+pub mod compaction;
 pub mod frontend;
 pub mod model;
 pub mod tool;
@@ -216,6 +217,7 @@ struct Journal {
     next_request: u64,
     next_turn: u64,
     next_tool: u64,
+    next_compaction: u64,
     transcript: bool,
     warning: Option<&'static str>,
 }
@@ -253,6 +255,7 @@ impl Journal {
             next_request: 0,
             next_turn: 0,
             next_tool: 0,
+            next_compaction: 0,
             transcript: false,
             warning: Some(WARNING),
         }
@@ -304,6 +307,7 @@ impl Journal {
                 next_request: 0,
                 next_turn: 0,
                 next_tool: 0,
+                next_compaction: 0,
                 transcript: config.transcript,
                 warning: None,
             })

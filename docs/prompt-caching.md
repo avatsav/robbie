@@ -10,7 +10,7 @@ See [environment settings](development.md#environment-variables).
 
 ## Request behavior
 
-With markers enabled, Robbie sends `{"type":"ephemeral"}` at these checkpoints:
+For ordinary agent requests with markers enabled, Robbie sends `{"type":"ephemeral"}` at these checkpoints:
 
 | Request section | Checkpoint |
 | --- | --- |
@@ -22,5 +22,6 @@ With markers enabled, Robbie sends `{"type":"ephemeral"}` at these checkpoints:
 - Markers are added to outgoing requests only; stored history stays unchanged and generated markers do not accumulate.
 - Robbie does not set a `ttl`; the provider determines cache lifetime.
 - Parent and child agents share the setting. Retries reuse the encoded request.
+- Explicit `Session::compact` summary requests advertise no tools and omit generated markers. Subsequent ordinary requests include the latest summary plus retained history and use the configured cache policy.
 - Cache-control rejections surface as request errors; Robbie does not silently retry with markers disabled.
 - Turning markers off does not change OpenRouter whole-response caching.

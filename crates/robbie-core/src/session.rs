@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub use crate::{
+    agent::compaction::{Options as CompactionOptions, Outcome as CompactionOutcome},
     diagnostics::{
         CapturePolicy, RecordingSettings,
         frontend::{TextAppend, UiEnd as FrontendEnd, UiTurn as FrontendTurn},
@@ -126,6 +127,31 @@ impl Session {
 
     pub fn recording(&self) -> Recording {
         self.recording.clone()
+    }
+
+    /// Explicitly compact this conversation while no turn borrows the session.
+    /// Limits are caller-supplied. Recent-size/shrink estimates use serialized
+    /// message characters / 4; they do not guarantee model-window fit. A commit
+    /// affects subsequent requests, not frontend transcript state. No tools run.
+    /// Dropping the future while waiting leaves context unchanged; the provider
+    /// may still have processed or billed the request. No detached task is spawned.
+    ///
+    /// # Errors
+    /// Invalid limits/exchanges, preparation overflow, request/response failure,
+    /// or an unusable/nonshrinking candidate leave the previous context intact.
+    ///
+    /// A prepared turn prevents concurrent compaction:
+    /// ```compile_fail
+    /// use robbie_core::{CompactionOptions, Session};
+    /// fn conflicting_operations(session: &mut Session, options: CompactionOptions) {
+    ///     let turn = session.prepare_turn();
+    ///     let compaction = session.compact(options);
+    ///     drop(turn);
+    ///     drop(compaction);
+    /// }
+    /// ```
+    pub async fn compact(&mut self, options: CompactionOptions) -> Result<CompactionOutcome> {
+        self.agent.compact(options).await
     }
 
     #[cfg(all(unix, any(test, feature = "test-support")))]

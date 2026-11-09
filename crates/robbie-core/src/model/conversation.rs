@@ -37,6 +37,14 @@ pub struct Reply {
     pub(super) continuation: Vec<Value>,
 }
 
+/// The latest compaction summary is ordinary user-role historical context, not
+/// an assistant response or resumable session snapshot.
+pub(crate) fn summary_message(summary: &str) -> Message {
+    Message::User(format!(
+        "The earlier conversation was compacted into the following summary. Use it as historical context and continue from the retained messages.\n\n<summary>\n{summary}\n</summary>"
+    ))
+}
+
 impl Reply {
     pub fn text(&self) -> String {
         self.output

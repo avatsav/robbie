@@ -30,39 +30,40 @@ pub trait Protocol {
 
 pub struct AnthropicMessages;
 
-impl Protocol for AnthropicMessages {
-    fn encode(
+impl AnthropicMessages {
+    /// A chars/4 wire-size heuristic, including opaque continuation. This is
+    /// neither exact tokenization nor a bound on the complete model request.
+    pub(super) fn estimate_message_tokens(&self, message: &Message) -> usize {
+        encode_message(message)
+            .to_string()
+            .chars()
+            .count()
+            .div_ceil(4)
+    }
+
+    pub(super) fn encode_with_summary(
         &self,
         model: &str,
         system: &str,
+        summary: &str,
         messages: &[Message],
         tools: &[Value],
         prompt_cache: PromptCache,
     ) -> EncodedRequest {
-        let messages: Vec<Value> = messages
-            .iter()
-            .map(|message| match message {
-                Message::User(text) => json!({"role": "user", "content": text}),
-                Message::Assistant(reply) => {
-                    json!({"role": "assistant", "content": reply.continuation})
-                }
-                Message::ToolResults(results) => {
-                    let results: Vec<Value> = results
-                        .iter()
-                        .map(|result| {
-                            json!({
-                                "type": "tool_result",
-                                "tool_use_id": result.tool_call_id,
-                                "content": result.content,
-                                "is_error": result.is_error,
-                            })
-                        })
-                        .collect();
-                    // Anthropic carries tool results inside a user message.
-                    json!({"role": "user", "content": results})
-                }
-            })
+        let messages = std::iter::once(encode_message(&super::summary_message(summary)))
+            .chain(messages.iter().map(encode_message))
             .collect();
+        self.encode_context(model, system, messages, tools, prompt_cache)
+    }
+
+    fn encode_context(
+        &self,
+        model: &str,
+        system: &str,
+        messages: Vec<Value>,
+        tools: &[Value],
+        prompt_cache: PromptCache,
+    ) -> EncodedRequest {
         let mut headers = HeaderMap::new();
         headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
         let mut body = json!({
@@ -70,8 +71,6 @@ impl Protocol for AnthropicMessages {
             "max_tokens": 8000,
             "system": system,
             "messages": messages,
-            // Existing tool declarations use name/description/input_schema.
-            // A later protocol can translate them to its own tool format.
             "tools": tools,
         });
         if prompt_cache == PromptCache::Short {
@@ -82,6 +81,44 @@ impl Protocol for AnthropicMessages {
             headers,
             body,
         }
+    }
+
+    // Summary policy is request-local: no advertised tools or generated cache
+    // markers, and a caller-supplied output cap. Ordinary encoding is unchanged.
+    pub(super) fn encode_summary(
+        &self,
+        model: &str,
+        prompt: &str,
+        max_output_tokens: u32,
+    ) -> EncodedRequest {
+        let mut encoded = self.encode(
+            model,
+            "You summarize historical conversation data. Return only a context checkpoint; do not continue the task or call tools.",
+            &[Message::User(prompt.to_owned())],
+            &[],
+            PromptCache::Off,
+        );
+        encoded.body["max_tokens"] = json!(max_output_tokens);
+        encoded
+    }
+}
+
+impl Protocol for AnthropicMessages {
+    fn encode(
+        &self,
+        model: &str,
+        system: &str,
+        messages: &[Message],
+        tools: &[Value],
+        prompt_cache: PromptCache,
+    ) -> EncodedRequest {
+        self.encode_context(
+            model,
+            system,
+            messages.iter().map(encode_message).collect(),
+            tools,
+            prompt_cache,
+        )
     }
 
     fn decode(&self, body: Value) -> Result<Reply> {
@@ -181,6 +218,30 @@ impl Protocol for AnthropicMessages {
     }
 }
 
+fn encode_message(message: &Message) -> Value {
+    match message {
+        Message::User(text) => json!({"role": "user", "content": text}),
+        Message::Assistant(reply) => {
+            json!({"role": "assistant", "content": reply.continuation})
+        }
+        Message::ToolResults(results) => {
+            let results: Vec<Value> = results
+                .iter()
+                .map(|result| {
+                    json!({
+                        "type": "tool_result",
+                        "tool_use_id": result.tool_call_id,
+                        "content": result.content,
+                        "is_error": result.is_error,
+                    })
+                })
+                .collect();
+            // Anthropic carries tool results inside a user message.
+            json!({"role": "user", "content": results})
+        }
+    }
+}
+
 // Pi-style explicit anchors. Only this fresh wire value is changed; borrowed
 // schemas and opaque assistant continuation remain untouched. Cache lifetime is
 // the provider's default; no ttl field, model-name gate or root breakpoint.
@@ -252,6 +313,8 @@ fn mark_cache_block(block: &mut Value, slots: &mut usize) {
     }
 }
 
+#[cfg(test)]
+mod context_tests;
 #[cfg(test)]
 mod prompt_cache_tests;
 
