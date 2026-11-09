@@ -155,6 +155,29 @@ impl ModelClient {
             .compaction(source.into(), raw_messages, had_previous_summary)
     }
 
+    pub fn estimate_input_tokens(
+        &self,
+        system: &str,
+        summary: Option<&str>,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> u64 {
+        let encoded = match summary {
+            Some(summary) => self.protocol.encode_with_summary(
+                &self.model,
+                system,
+                summary,
+                messages,
+                tools,
+                self.prompt_cache,
+            ),
+            None => self
+                .protocol
+                .encode(&self.model, system, messages, tools, self.prompt_cache),
+        };
+        encoded.body.to_string().chars().count().div_ceil(4) as u64
+    }
+
     pub fn estimate_message_tokens(&self, message: &Message) -> usize {
         self.protocol.estimate_message_tokens(message)
     }

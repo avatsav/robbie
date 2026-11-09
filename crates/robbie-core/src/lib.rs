@@ -1,6 +1,8 @@
 //! Native agent sessions, independent of terminal or frontend initialization.
 //! Callers own the Tokio runtime, activity consumption, and turn future.
 mod agent;
+#[cfg(test)]
+mod budget;
 mod diagnostics;
 mod events;
 mod model;
@@ -19,7 +21,7 @@ pub use session::{
     FrontendEnd, FrontendTurn, ModelSettings, PreparedTurn, PromptCache, Recording,
     RecordingSettings, Session, SessionConfig, TextAppend,
 };
-pub use usage::{ContextUsage, TokenTotal, UsageSnapshot, UsageTotals};
+pub use usage::{ContextEstimate, ContextUsage, TokenTotal, UsageSnapshot, UsageTotals};
 
 #[cfg(test)]
 use agent::Agent;

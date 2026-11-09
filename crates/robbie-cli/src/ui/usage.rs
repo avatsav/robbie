@@ -38,6 +38,17 @@ pub(super) fn row(snapshot: UsageSnapshot, model: &str, width: usize) -> String 
             )
         },
     );
+    let context = snapshot
+        .estimate
+        .filter(|estimate| estimate.window > 0)
+        .map_or(context, |estimate| {
+            format!(
+                "~{:.1}%/{}{}",
+                estimate.tokens as f64 / estimate.window as f64 * 100.0,
+                compact(estimate.window),
+                if estimate.automatic { " (auto)" } else { "" }
+            )
+        });
     let stats = format!(
         "↑{} ↓{} R{} W{} ctx {context}",
         total(totals.input),
@@ -56,6 +67,21 @@ pub(super) fn row(snapshot: UsageSnapshot, model: &str, width: usize) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_context_is_explicitly_estimated_and_auto_is_not_invented() {
+        let snapshot = UsageSnapshot {
+            estimate: Some(crate::session::ContextEstimate {
+                tokens: 8000,
+                window: 64000,
+                automatic: false,
+            }),
+            ..UsageSnapshot::default()
+        };
+        let text = row(snapshot, "model", 80);
+        assert!(text.contains("~12.5%/64k"));
+        assert!(!text.contains("(auto)"));
+    }
 
     #[test]
     fn counts_distinguish_zero_unknown_and_partial_and_compact_large_values() {

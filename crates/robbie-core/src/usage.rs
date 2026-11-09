@@ -58,12 +58,21 @@ pub struct ContextUsage {
     pub trailing_messages: usize,
 }
 
+/// Prospective input estimate for a known advertised window; not a fit guarantee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContextEstimate {
+    pub tokens: u64,
+    pub window: u64,
+    pub automatic: bool,
+}
+
 /// Immutable statistics. In an activity, context belongs to the emitting source;
 /// `Session::statistics()` returns the root conversation's context. Totals are shared.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UsageSnapshot {
     pub totals: UsageTotals,
     pub context: Option<ContextUsage>,
+    pub estimate: Option<ContextEstimate>,
 }
 
 /// Protocol-normalized, disjoint categories for one received response.

@@ -22,6 +22,7 @@ const SYSTEM: &str = "You are a coding agent. Use tools to inspect and change th
 struct ContextBaseline {
     tokens: u64,
     messages: usize,
+    prompt_key: u64,
 }
 
 pub(crate) struct Agent {
@@ -72,11 +73,52 @@ impl Agent {
     pub(crate) fn statistics(&self) -> UsageSnapshot {
         UsageSnapshot {
             totals: self.model.usage_totals(),
+            estimate: self.estimated_context(),
             context: self.context_baseline.map(|baseline| ContextUsage {
                 reported_tokens: baseline.tokens,
                 trailing_messages: self.messages.len().saturating_sub(baseline.messages),
             }),
         }
+    }
+
+    fn prompt_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        serde_json::json!([
+            self.system_prompt(),
+            self.previous_summary,
+            self.tools.schemas()
+        ])
+        .to_string()
+        .hash(&mut hash);
+        hash.finish()
+    }
+
+    fn estimated_context(&self) -> Option<crate::ContextEstimate> {
+        let limits = self.limit_resolution()?.limits?;
+        let tokens = match self
+            .context_baseline
+            .filter(|baseline| baseline.prompt_key == self.prompt_key())
+        {
+            Some(baseline) => {
+                self.messages[baseline.messages..]
+                    .iter()
+                    .fold(baseline.tokens, |sum, message| {
+                        sum.saturating_add(self.model.estimate_message_tokens(message) as u64)
+                    })
+            }
+            None => self.model.estimate_input_tokens(
+                &self.system_prompt(),
+                self.previous_summary.as_deref(),
+                &self.messages,
+                &self.tools.schemas(),
+            ),
+        };
+        Some(crate::ContextEstimate {
+            tokens,
+            window: limits.context_window,
+            automatic: false,
+        })
     }
 
     fn publish_statistics(&self) {
@@ -200,6 +242,7 @@ impl Agent {
                 self.context_baseline = Some(ContextBaseline {
                     tokens,
                     messages: self.messages.len(),
+                    prompt_key: self.prompt_key(),
                 });
             }
             self.publish_statistics();

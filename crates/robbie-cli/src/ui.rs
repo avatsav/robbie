@@ -225,6 +225,7 @@ impl App {
                 self.statistics.totals = snapshot.totals;
                 if source == "main" {
                     self.statistics.context = snapshot.context;
+                    self.statistics.estimate = snapshot.estimate;
                 }
                 return receipt;
             }

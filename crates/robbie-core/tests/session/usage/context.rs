@@ -1,6 +1,41 @@
 use super::*;
 
 #[tokio::test]
+async fn projections_use_reported_usage_then_fall_back_after_compaction() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::new(vec![
+        Reply::Http(200, "", NORMAL),
+        Reply::Http(200, "", SUMMARY),
+    ]);
+    let (mut session, _, _) = connect(&server, root.path(), false).await;
+    session
+        .resolve_model_limits(Some(robbie_core::ModelLimits {
+            context_window: 64000,
+            max_input_tokens: None,
+            max_output_tokens: Some(8000),
+        }))
+        .await
+        .unwrap();
+    let initial = session.statistics().estimate.unwrap();
+    assert_eq!(initial.window, 64000);
+    assert!(
+        initial.tokens > 0,
+        "system and tools count even with no conversation"
+    );
+    assert!(!initial.automatic);
+    session
+        .prepare_turn()
+        .run(&"old goal ".repeat(200))
+        .await
+        .unwrap();
+    assert_eq!(session.statistics().estimate.unwrap().tokens, 160);
+    session.compact(options()).await.unwrap();
+    assert!(session.statistics().context.is_none());
+    assert!(session.statistics().estimate.unwrap().tokens > 0);
+    assert_eq!(session.statistics().totals.responses, 2);
+}
+
+#[tokio::test]
 async fn compaction_counts_summary_usage_but_only_a_commit_invalidates_context() {
     for (candidate, committed) in [(SUMMARY, true), (REJECTED, false)] {
         let root = tempfile::tempdir().unwrap();
