@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 
 use super::protocol::EncodedRequest;
 
+mod limits;
+pub use limits::{LimitResolution, LimitSource, ModelLimits};
+
 // Retain the final JSON body independently of headers/authentication. Diagnostics
 // can capture exactly the provider-prepared protocol payload without inspecting
 // or serializing a credential-bearing HTTP request.

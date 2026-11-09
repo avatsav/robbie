@@ -52,6 +52,7 @@ Keep the focused filter: child fixtures must not be run directly.
 | `OPENROUTER_API_KEY` | API key | Required | OpenRouter authentication. |
 | `OPENROUTER_MODEL` | OpenRouter model ID | Required | Model used by parent and child agents. |
 | `OPENROUTER_PROVIDER` | Provider slug; empty or unset | Unrestricted | Restrict upstream routing to one provider. |
+| `ROBBIE_CONTEXT_WINDOW` | Positive integer tokens; unset | Discover from OpenRouter | Override the session context capacity without metadata requests. |
 | `ROBBIE_PROMPT_CACHE` | `short`, `off` | `short` | Generate prompt-cache markers using provider defaults, or omit them. |
 | `ROBBIE_TRANSCRIPT` | `1`; any other value disables | Disabled | Capture sensitive prompts, tool payloads and model bodies alongside diagnostics. |
 | `ROBBIE_MASCOT` | `off`; any other value enables | Enabled | Disable the mascot for the session. |

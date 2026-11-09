@@ -2,6 +2,25 @@ use super::*;
 use serde_json::Value;
 use std::{env, fs};
 
+#[test]
+fn context_window_override_requires_a_positive_integer() {
+    use std::ffi::OsStr;
+    assert_eq!(context_window_setting(None).unwrap(), None);
+    assert_eq!(
+        context_window_setting(Some(OsStr::new("64000")))
+            .unwrap()
+            .unwrap()
+            .context_window,
+        64000
+    );
+    for bad in ["", "0", "-1", "64k", "secret-value", "18446744073709551616"] {
+        let error = context_window_setting(Some(OsStr::new(bad)))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "ROBBIE_CONTEXT_WINDOW must be a positive integer");
+    }
+}
+
 const WARNING: &str = "Diagnostics recording failed and is disabled for this session. Agent execution is unaffected; a partial final record may remain.";
 
 fn records(path: &Path) -> Vec<Value> {

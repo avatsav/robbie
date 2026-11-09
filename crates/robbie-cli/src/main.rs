@@ -48,7 +48,9 @@ async fn run() -> Result<()> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let (session, receiver) = Session::new(SessionConfig {
+    let configured_limits =
+        context_window_setting(std::env::var_os("ROBBIE_CONTEXT_WINDOW").as_deref())?;
+    let (mut session, receiver) = Session::new(SessionConfig {
         workspace: workspace.clone(),
         skills_directory: workspace.join("skills"),
         model: ModelSettings {
@@ -60,7 +62,24 @@ async fn run() -> Result<()> {
         recording: recording_settings_from_env(),
     })
     .await?;
+    session.resolve_model_limits(configured_limits).await?;
     fullscreen::run(session, receiver, workspace).await
+}
+
+fn context_window_setting(value: Option<&std::ffi::OsStr>) -> Result<Option<session::ModelLimits>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let context_window = value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .context("ROBBIE_CONTEXT_WINDOW must be a positive integer")?;
+    Ok(Some(session::ModelLimits {
+        context_window,
+        max_input_tokens: None,
+        max_output_tokens: None,
+    }))
 }
 
 fn recording_settings_from_env() -> RecordingSettings {

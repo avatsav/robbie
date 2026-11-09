@@ -357,6 +357,12 @@ async fn run_app(
         source: "main",
         kind: EventKind::UsageUpdated(session.statistics()),
     });
+    if let Some(warning) = session
+        .model_limit_resolution()
+        .and_then(|resolution| resolution.warning())
+    {
+        app.content.notice(format!("[warning] {warning}"));
+    }
     app.recorder = Some(recorder.clone());
     if let Some(warning) = recorder.take_warning() {
         app.content.notice(format!("[warning] {warning}"));

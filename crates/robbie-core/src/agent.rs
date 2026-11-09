@@ -58,6 +58,17 @@ impl Agent {
         self.model.model_name()
     }
 
+    pub(crate) async fn resolve_limits(
+        &self,
+        configured: Option<model::ModelLimits>,
+    ) -> Result<model::LimitResolution> {
+        self.model.resolve_limits(configured).await
+    }
+
+    pub(crate) fn limit_resolution(&self) -> Option<model::LimitResolution> {
+        self.model.limit_resolution()
+    }
+
     pub(crate) fn statistics(&self) -> UsageSnapshot {
         UsageSnapshot {
             totals: self.model.usage_totals(),

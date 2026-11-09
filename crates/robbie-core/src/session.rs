@@ -125,6 +125,21 @@ impl Session {
         self.agent.model_name()
     }
 
+    /// Resolve once per session, shared by parent and children. A configured
+    /// override avoids network access. Discovery failures return unknown limits
+    /// with a fixed warning, never a fabricated capacity or response payload.
+    /// Invalid overrides or conflicting repeat overrides return an error.
+    pub async fn resolve_model_limits(
+        &mut self,
+        configured: Option<crate::model::ModelLimits>,
+    ) -> Result<crate::model::LimitResolution> {
+        self.agent.resolve_limits(configured).await
+    }
+
+    pub fn model_limit_resolution(&self) -> Option<crate::model::LimitResolution> {
+        self.agent.limit_resolution()
+    }
+
     pub fn recording(&self) -> Recording {
         self.recording.clone()
     }

@@ -2,6 +2,8 @@
 
 #[path = "session/compaction.rs"]
 mod compaction;
+#[path = "session/limits.rs"]
+mod limits;
 #[path = "session/usage.rs"]
 mod usage;
 

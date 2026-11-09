@@ -38,7 +38,7 @@ pub(crate) use metadata::StopReason;
 pub use prompt_cache::PromptCache;
 use protocol::EncodedRequest;
 pub use protocol::{AnthropicMessages, Protocol};
-pub use provider::{OpenRouter, Provider};
+pub use provider::{LimitResolution, LimitSource, ModelLimits, OpenRouter, Provider};
 
 // Concrete composition for today's one provider/protocol pair. Traits define
 // the seams without a registry, trait objects, or runtime protocol selection.
@@ -50,6 +50,7 @@ pub struct ModelClient {
     model: String,
     recorder: Recorder,
     usage: UsageLedger,
+    limits: tokio::sync::OnceCell<LimitResolution>,
 }
 
 // Local correlation belongs to the exchange, not protocol continuation/history.
@@ -82,6 +83,7 @@ impl ModelClient {
             model,
             recorder,
             usage: UsageLedger::default(),
+            limits: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -93,6 +95,46 @@ impl ModelClient {
 
     pub fn model_name(&self) -> &str {
         &self.model
+    }
+
+    pub fn limit_resolution(&self) -> Option<LimitResolution> {
+        self.limits.get().copied()
+    }
+
+    pub async fn resolve_limits(&self, configured: Option<ModelLimits>) -> Result<LimitResolution> {
+        let configured = configured.map(ModelLimits::validate).transpose()?;
+        if let (Some(existing), Some(configured)) = (self.limit_resolution(), configured) {
+            anyhow::ensure!(
+                existing.limits == Some(configured),
+                "model limits are already resolved for this session"
+            );
+        }
+        Ok(*self
+            .limits
+            .get_or_init(|| async {
+                if let Some(limits) = configured {
+                    return LimitResolution {
+                        limits: Some(limits),
+                        source: LimitSource::Configured,
+                    };
+                }
+                let limits = tokio::time::timeout(
+                    Duration::from_secs(8),
+                    self.provider.discover_limits(&self.http, &self.model),
+                )
+                .await
+                .ok()
+                .flatten();
+                LimitResolution {
+                    limits,
+                    source: if limits.is_some() {
+                        LimitSource::OpenRouter
+                    } else {
+                        LimitSource::Unknown
+                    },
+                }
+            })
+            .await)
     }
 
     pub fn usage_totals(&self) -> UsageTotals {
