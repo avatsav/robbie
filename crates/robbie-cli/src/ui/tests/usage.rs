@@ -2,9 +2,14 @@ use super::*;
 
 #[test]
 fn child_statistics_update_totals_without_replacing_root_context() {
-    use crate::session::{ContextUsage, UsageSnapshot};
+    use crate::session::{ContextEstimate, ContextUsage, UsageSnapshot};
     let mut app = App::default();
     let root = UsageSnapshot {
+        estimate: Some(ContextEstimate {
+            tokens: 100,
+            window: 64000,
+            automatic: true,
+        }),
         context: Some(ContextUsage {
             reported_tokens: 100,
             trailing_messages: 0,
@@ -17,6 +22,11 @@ fn child_statistics_update_totals_without_replacing_root_context() {
     });
     let mut child = root;
     child.totals.responses = 2;
+    child.estimate = Some(ContextEstimate {
+        tokens: 999,
+        window: 64000,
+        automatic: true,
+    });
     child.context = Some(ContextUsage {
         reported_tokens: 999,
         trailing_messages: 0,
@@ -27,14 +37,38 @@ fn child_statistics_update_totals_without_replacing_root_context() {
     });
     assert_eq!(app.statistics.totals, child.totals);
     assert_eq!(app.statistics.context, root.context);
+    assert_eq!(app.statistics.estimate, root.estimate);
     app.activity(AgentEvent {
         source: "main",
         kind: EventKind::UsageUpdated(UsageSnapshot {
             context: None,
+            estimate: None,
             ..child
         }),
     });
     assert_eq!(app.statistics.context, None);
+    assert_eq!(app.statistics.estimate, None);
+}
+
+#[test]
+fn warnings_do_not_start_activity_or_claim_assistant_text() {
+    for working in [false, true] {
+        let mut app = App {
+            working,
+            ..App::default()
+        };
+        let receipt = app.activity(AgentEvent {
+            source: "main",
+            kind: EventKind::Warning("bounded warning"),
+        });
+        assert_eq!(app.working, working);
+        assert!(receipt.assistant.is_none());
+        assert!(
+            app.take_output()
+                .iter()
+                .any(|line| line.text().contains("bounded warning"))
+        );
+    }
 }
 
 #[test]

@@ -54,6 +54,7 @@ pub enum Decision {
 pub enum TurnEnd {
     NoToolResults { returned_text_bytes: usize },
     ModelFailed,
+    ContextBudgetFailed,
     Cancelled,
 }
 

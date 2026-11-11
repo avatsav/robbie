@@ -14,10 +14,22 @@ pub(super) fn compact(tokens: u64) -> String {
     }
 }
 
+fn lower_bound(tokens: u64) -> String {
+    // Never round a lower bound upward into a claim the reports don't support.
+    let step = match tokens {
+        0..1000 => 1,
+        1000..10000 => 100,
+        10000..1000000 => 1000,
+        1000000..10000000 => 100000,
+        _ => 1000000,
+    };
+    compact(tokens / step * step)
+}
+
 fn total(total: TokenTotal) -> String {
     match (total.complete, total.reported) {
         (false, 0) => "?".into(),
-        (false, tokens) => format!("≥{}", compact(tokens)),
+        (false, tokens) => format!("≥{}", lower_bound(tokens)),
         (true, tokens) => compact(tokens),
     }
 }
@@ -34,7 +46,11 @@ pub(super) fn row(snapshot: UsageSnapshot, model: &str, width: usize) -> String 
                 } else {
                     ""
                 },
-                compact(context.reported_tokens)
+                if context.trailing_messages > 0 {
+                    lower_bound(context.reported_tokens)
+                } else {
+                    compact(context.reported_tokens)
+                }
             )
         },
     );
@@ -99,6 +115,20 @@ mod tests {
                 complete: false
             }),
             "≥1.2k"
+        );
+        assert_eq!(
+            total(TokenTotal {
+                reported: 1499,
+                complete: false
+            }),
+            "≥1.4k"
+        );
+        assert_eq!(
+            total(TokenTotal {
+                reported: 999999,
+                complete: false
+            }),
+            "≥999k"
         );
         assert_eq!(compact(12345), "12k");
         assert_eq!(compact(1234567), "1.2M");

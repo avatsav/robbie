@@ -41,6 +41,7 @@ async fn run() -> Result<()> {
     dotenvy::dotenv().ok();
     let prompt_cache =
         session::PromptCache::from_setting(std::env::var_os("ROBBIE_PROMPT_CACHE").as_deref())?;
+    let auto_policy = auto_compaction_setting(std::env::var_os("ROBBIE_AUTO_COMPACT").as_deref())?;
     let workspace = std::env::current_dir()?;
     let api_key = std::env::var("OPENROUTER_API_KEY").context("OPENROUTER_API_KEY is not set")?;
     let model_name = std::env::var("OPENROUTER_MODEL").context("OPENROUTER_MODEL is not set")?;
@@ -63,7 +64,21 @@ async fn run() -> Result<()> {
     })
     .await?;
     session.resolve_model_limits(configured_limits).await?;
+    session.configure_auto_compaction(auto_policy)?;
     fullscreen::run(session, receiver, workspace).await
+}
+
+fn auto_compaction_setting(value: Option<&std::ffi::OsStr>) -> Result<session::CompactionPolicy> {
+    let enabled = match value {
+        None => true,
+        Some(value) if value == "on" => true,
+        Some(value) if value == "off" => false,
+        _ => bail!("ROBBIE_AUTO_COMPACT must be on or off"),
+    };
+    Ok(session::CompactionPolicy {
+        enabled,
+        ..session::CompactionPolicy::default()
+    })
 }
 
 fn context_window_setting(value: Option<&std::ffi::OsStr>) -> Result<Option<session::ModelLimits>> {

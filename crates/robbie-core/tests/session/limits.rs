@@ -92,11 +92,14 @@ async fn discovery_is_cached_and_never_counted_or_recorded_as_inference() {
 #[tokio::test]
 async fn pinned_unknown_routes_do_not_fall_back_to_an_unrelated_aggregate() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::new(vec![Reply::Http(
-        200,
-        "",
-        r#"{"data":{"context_length":1000000,"endpoints":[{"tag":"other","context_length":128000}]}}"#,
-    )]);
+    let server = Server::new(vec![
+        Reply::Http(
+            200,
+            "",
+            r#"{"data":{"context_length":1000000,"endpoints":[{"tag":"other","context_length":128000}]}}"#,
+        ),
+        Reply::Http(200, "", SUCCESS),
+    ]);
     let mut session = connect(&server, root.path(), Some("missing")).await;
     let resolution = session.resolve_model_limits(None).await.unwrap();
     assert_eq!(resolution.source, LimitSource::Unknown);
@@ -104,6 +107,17 @@ async fn pinned_unknown_routes_do_not_fall_back_to_an_unrelated_aggregate() {
     assert!(resolution.warning().unwrap().contains("disabled"));
     session.resolve_model_limits(None).await.unwrap();
     assert_eq!(server.count(), 1);
+    session
+        .configure_auto_compaction(robbie_core::CompactionPolicy::default())
+        .unwrap();
+    session
+        .prepare_turn()
+        .run("no guessed window")
+        .await
+        .unwrap();
+    assert_eq!(server.count(), 2);
+    assert!(session.statistics().estimate.is_none());
+    assert!(events(&log(&root.path().join("state")), "compaction_started").is_empty());
 }
 
 #[tokio::test]

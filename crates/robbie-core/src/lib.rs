@@ -1,7 +1,6 @@
 //! Native agent sessions, independent of terminal or frontend initialization.
 //! Callers own the Tokio runtime, activity consumption, and turn future.
 mod agent;
-#[cfg(test)]
 mod budget;
 mod diagnostics;
 mod events;
@@ -14,6 +13,7 @@ mod usage;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use budget::CompactionPolicy;
 pub use diagnostics::activity::TextContext;
 pub use model::{LimitResolution, LimitSource, ModelLimits};
 pub use session::{

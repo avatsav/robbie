@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+#[path = "session/automatic.rs"]
+mod automatic;
 #[path = "session/compaction.rs"]
 mod compaction;
 #[path = "session/limits.rs"]

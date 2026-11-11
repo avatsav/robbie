@@ -6,9 +6,13 @@ pub(crate) const SAFETY_TOKENS: u64 = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompactionPolicy {
+    /// Enable automatic preflight after explicit session configuration.
     pub enabled: bool,
+    /// Soft trigger reserve, raised to at least ordinary output + safety headroom.
     pub reserve_tokens: u64,
+    /// Soft recent-history target, bounded to leave summary/input/output space.
     pub keep_recent_tokens: usize,
+    /// Positive desired cap; bounded against model output and available input room.
     pub summary_output_tokens: u32,
 }
 
@@ -27,10 +31,13 @@ impl Default for CompactionPolicy {
 pub(crate) struct Plan {
     pub compact: bool,
     pub fits: bool,
-    pub output_tokens: u32,
     pub summary_output_tokens: u32,
     pub keep_recent_tokens: usize,
     pub max_summary_chars: usize,
+}
+
+pub(crate) fn output_tokens(limits: ModelLimits) -> u32 {
+    limits.max_output_tokens.unwrap_or(8000).min(8000) as u32
 }
 
 pub(crate) fn fits(limits: ModelLimits, input: u64, output: u32) -> bool {
@@ -50,10 +57,11 @@ pub(crate) fn plan(limits: ModelLimits, policy: CompactionPolicy, input: u64) ->
         policy.summary_output_tokens > 0,
         "summary output limit must be positive"
     );
-    let output_tokens = limits.max_output_tokens.unwrap_or(8000).min(8000) as u32;
+    let output_tokens = output_tokens(limits);
     let room = limits
         .context_window
         .checked_sub(u64::from(output_tokens) + SAFETY_TOKENS)
+        .map(|room| room.min(limits.max_input_tokens.unwrap_or(u64::MAX)))
         .filter(|room| *room > 1)
         .ok_or_else(|| {
             anyhow::anyhow!("model window leaves no room for input and output headroom")
@@ -78,7 +86,6 @@ pub(crate) fn plan(limits: ModelLimits, policy: CompactionPolicy, input: u64) ->
         compact: policy.enabled
             && (input > limits.context_window - reserve || !fits(limits, input, output_tokens)),
         fits: fits(limits, input, output_tokens),
-        output_tokens,
         summary_output_tokens,
         keep_recent_tokens: policy
             .keep_recent_tokens
@@ -139,7 +146,7 @@ mod tests {
         let planned = plan(limited, CompactionPolicy::default(), 1001).unwrap();
         assert!(planned.compact);
         assert!(!planned.fits);
-        assert_eq!(planned.output_tokens, 100);
+        assert_eq!(output_tokens(limited), 100);
     }
 
     #[test]
@@ -162,7 +169,7 @@ mod tests {
                 ..limits()
             },
             planned.keep_recent_tokens as u64 + u64::from(planned.summary_output_tokens),
-            planned.output_tokens
+            output_tokens(limits())
         ));
     }
 

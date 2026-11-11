@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use anyhow::{Result, ensure};
 
 use crate::{
-    diagnostics::compaction::End,
+    diagnostics::{compaction::End, model::RequestOrigin},
     model::{Message, ModelClient, Output},
 };
 
@@ -53,12 +53,12 @@ pub enum Outcome {
 
 pub(super) async fn compact(
     model: &ModelClient,
-    source: &'static str,
+    origin: impl Into<RequestOrigin>,
     messages: &mut Vec<Message>,
     previous_summary: &mut Option<String>,
     options: Options,
 ) -> Result<Outcome> {
-    let operation = model.compaction_span(source, messages.len(), previous_summary.is_some());
+    let operation = model.compaction_span(origin, messages.len(), previous_summary.is_some());
     let result = match options.limits() {
         Ok(limits) => {
             transaction::compact_history(
@@ -133,7 +133,7 @@ fn find_cut(
     Ok(None) // The whole history fits within the recent target.
 }
 
-fn validate_tool_exchanges(messages: &[Message]) -> Result<()> {
+pub(super) fn validate_tool_exchanges(messages: &[Message]) -> Result<()> {
     const INVALID: &str = "cannot compact an incomplete or mismatched tool exchange";
     let mut pending = HashSet::new();
 

@@ -3,6 +3,32 @@ use serde_json::Value;
 use std::{env, fs};
 
 #[test]
+fn automatic_compaction_defaults_on_and_accepts_only_an_explicit_opt_out() {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStringExt;
+    assert!(auto_compaction_setting(None).unwrap().enabled);
+    assert!(
+        auto_compaction_setting(Some(OsStr::new("on")))
+            .unwrap()
+            .enabled
+    );
+    assert!(
+        !auto_compaction_setting(Some(OsStr::new("off")))
+            .unwrap()
+            .enabled
+    );
+    for bad in ["", "true", "0", "OFF", "secret-value"] {
+        assert_eq!(
+            auto_compaction_setting(Some(OsStr::new(bad)))
+                .unwrap_err()
+                .to_string(),
+            "ROBBIE_AUTO_COMPACT must be on or off"
+        );
+    }
+    assert!(auto_compaction_setting(Some(&OsString::from_vec(vec![0xff]))).is_err());
+}
+
+#[test]
 fn context_window_override_requires_a_positive_integer() {
     use std::ffi::OsStr;
     assert_eq!(context_window_setting(None).unwrap(), None);

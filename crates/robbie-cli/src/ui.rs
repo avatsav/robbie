@@ -216,7 +216,10 @@ impl App {
 
     pub(super) fn activity(&mut self, event: AgentEvent) -> ActivityReceipt {
         let mut receipt = ActivityReceipt { assistant: None };
-        if !matches!(&event.kind, EventKind::UsageUpdated(_)) {
+        if !matches!(
+            &event.kind,
+            EventKind::UsageUpdated(_) | EventKind::Warning(_)
+        ) {
             self.working = true;
         }
         let source = event.source;
@@ -227,6 +230,10 @@ impl App {
                     self.statistics.context = snapshot.context;
                     self.statistics.estimate = snapshot.estimate;
                 }
+                return receipt;
+            }
+            EventKind::Warning(message) => {
+                self.notice(format!("[warning] {message}"));
                 return receipt;
             }
             EventKind::ModelStarted => {}

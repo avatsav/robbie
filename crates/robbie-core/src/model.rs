@@ -51,6 +51,7 @@ pub struct ModelClient {
     recorder: Recorder,
     usage: UsageLedger,
     limits: tokio::sync::OnceCell<LimitResolution>,
+    compaction_policy: std::sync::OnceLock<crate::CompactionPolicy>,
 }
 
 // Local correlation belongs to the exchange, not protocol continuation/history.
@@ -84,6 +85,7 @@ impl ModelClient {
             recorder,
             usage: UsageLedger::default(),
             limits: tokio::sync::OnceCell::new(),
+            compaction_policy: std::sync::OnceLock::new(),
         }
     }
 
@@ -95,6 +97,38 @@ impl ModelClient {
 
     pub fn model_name(&self) -> &str {
         &self.model
+    }
+
+    pub fn configure_compaction(&self, policy: crate::CompactionPolicy) -> Result<()> {
+        anyhow::ensure!(
+            policy.summary_output_tokens > 0,
+            "summary output limit must be positive"
+        );
+        let resolution = self
+            .limit_resolution()
+            .context("resolve model limits before configuring automatic compaction")?;
+        if policy.enabled
+            && let Some(limits) = resolution.limits
+        {
+            crate::budget::plan(limits, policy, 0)?;
+        }
+        if let Err(requested) = self.compaction_policy.set(policy) {
+            anyhow::ensure!(
+                self.compaction_policy.get() == Some(&requested),
+                "automatic compaction is already configured for this session"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn compaction_policy(&self) -> Option<crate::CompactionPolicy> {
+        self.compaction_policy.get().copied()
+    }
+
+    fn ordinary_output_tokens(&self) -> u32 {
+        self.limit_resolution()
+            .and_then(|resolution| resolution.limits)
+            .map_or(8000, crate::budget::output_tokens)
     }
 
     pub fn limit_resolution(&self) -> Option<LimitResolution> {
@@ -147,12 +181,12 @@ impl ModelClient {
 
     pub fn compaction_span(
         &self,
-        source: &'static str,
+        origin: impl Into<RequestOrigin>,
         raw_messages: usize,
         had_previous_summary: bool,
     ) -> Compaction {
         self.recorder
-            .compaction(source.into(), raw_messages, had_previous_summary)
+            .compaction(origin.into(), raw_messages, had_previous_summary)
     }
 
     pub fn estimate_input_tokens(
@@ -190,7 +224,7 @@ impl ModelClient {
         messages: &[Message],
         tools: &[Value],
     ) -> Result<Completion> {
-        let encoded = self.protocol.encode_with_summary(
+        let mut encoded = self.protocol.encode_with_summary(
             &self.model,
             system,
             summary,
@@ -198,6 +232,7 @@ impl ModelClient {
             tools,
             self.prompt_cache,
         );
+        encoded.body["max_tokens"] = serde_json::json!(self.ordinary_output_tokens());
         Ok(self
             .complete_encoded(origin, encoded, Policy::default())
             .await?
@@ -223,9 +258,10 @@ impl ModelClient {
         tools: &[Value],
         policy: Policy,
     ) -> Result<Completion> {
-        let encoded = self
-            .protocol
-            .encode(&self.model, system, messages, tools, self.prompt_cache);
+        let mut encoded =
+            self.protocol
+                .encode(&self.model, system, messages, tools, self.prompt_cache);
+        encoded.body["max_tokens"] = serde_json::json!(self.ordinary_output_tokens());
         let CompletionWithMetadata {
             completion,
             metadata: _metadata,
@@ -248,6 +284,16 @@ impl ModelClient {
             .protocol
             .encode_summary(&self.model, &prompt, max_output_tokens);
         drop(prompt);
+        if let Some(limits) = self
+            .limit_resolution()
+            .and_then(|resolution| resolution.limits)
+        {
+            let input = encoded.body.to_string().chars().count().div_ceil(4) as u64;
+            anyhow::ensure!(
+                crate::budget::fits(limits, input, max_output_tokens),
+                "summary input/output exceeds known model budget"
+            );
+        }
         self.complete_encoded(origin, encoded, Policy::default())
             .await
     }

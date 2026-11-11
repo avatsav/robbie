@@ -136,6 +136,14 @@ impl Session {
         self.agent.resolve_limits(configured).await
     }
 
+    /// Opt in once, after resolving limits. Children share this immutable policy,
+    /// never the parent's history or usage baseline. Unknown capacity leaves
+    /// automatic checks disabled; inspect the resolution's warning.
+    /// Invalid budgets or conflicting repeat configuration return an error.
+    pub fn configure_auto_compaction(&mut self, policy: crate::CompactionPolicy) -> Result<()> {
+        self.agent.configure_auto_compaction(policy)
+    }
+
     pub fn model_limit_resolution(&self) -> Option<crate::model::LimitResolution> {
         self.agent.limit_resolution()
     }

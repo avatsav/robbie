@@ -35,6 +35,7 @@ pub(crate) struct Agent {
     messages: Vec<Message>,
     previous_summary: Option<String>,
     context_baseline: Option<ContextBaseline>,
+    auto_blocked: bool,
 }
 
 impl Agent {
@@ -52,6 +53,7 @@ impl Agent {
             messages: Vec::new(),
             previous_summary: None,
             context_baseline: None,
+            auto_blocked: false,
         }
     }
 
@@ -64,6 +66,10 @@ impl Agent {
         configured: Option<model::ModelLimits>,
     ) -> Result<model::LimitResolution> {
         self.model.resolve_limits(configured).await
+    }
+
+    pub(crate) fn configure_auto_compaction(&self, policy: crate::CompactionPolicy) -> Result<()> {
+        self.model.configure_compaction(policy)
     }
 
     pub(crate) fn limit_resolution(&self) -> Option<model::LimitResolution> {
@@ -96,10 +102,9 @@ impl Agent {
 
     fn estimated_context(&self) -> Option<crate::ContextEstimate> {
         let limits = self.limit_resolution()?.limits?;
-        let tokens = match self
-            .context_baseline
-            .filter(|baseline| baseline.prompt_key == self.prompt_key())
-        {
+        let tokens = match self.context_baseline.filter(|baseline| {
+            baseline.messages <= self.messages.len() && baseline.prompt_key == self.prompt_key()
+        }) {
             Some(baseline) => {
                 self.messages[baseline.messages..]
                     .iter()
@@ -117,7 +122,10 @@ impl Agent {
         Some(crate::ContextEstimate {
             tokens,
             window: limits.context_window,
-            automatic: false,
+            automatic: self
+                .model
+                .compaction_policy()
+                .is_some_and(|policy| policy.enabled),
         })
     }
 
@@ -145,10 +153,18 @@ impl Agent {
         &mut self,
         options: compaction::Options,
     ) -> Result<compaction::Outcome> {
+        self.compact_in_context(options, self.source.into()).await
+    }
+
+    async fn compact_in_context(
+        &mut self,
+        options: compaction::Options,
+        origin: RequestOrigin,
+    ) -> Result<compaction::Outcome> {
         let before = self.statistics();
         let result = compaction::compact(
             &self.model,
-            self.source,
+            origin,
             &mut self.messages,
             &mut self.previous_summary,
             options,
@@ -156,11 +172,70 @@ impl Agent {
         .await;
         if matches!(result, Ok(compaction::Outcome::Compacted { .. })) {
             self.context_baseline = None;
+            self.auto_blocked = false;
         }
         if self.statistics() != before {
             self.publish_statistics();
         }
         result
+    }
+
+    async fn prepare_request(&mut self, origin: RequestOrigin) -> Result<()> {
+        let Some(policy) = self
+            .model
+            .compaction_policy()
+            .filter(|policy| policy.enabled)
+        else {
+            return Ok(());
+        };
+        let Some(estimate) = self.estimated_context() else {
+            return Ok(());
+        };
+        let Some(limits) = self
+            .limit_resolution()
+            .and_then(|resolution| resolution.limits)
+        else {
+            return Ok(());
+        };
+        compaction::validate_tool_exchanges(&self.messages)?;
+        self.publish_statistics();
+        let planned = crate::budget::plan(limits, policy, estimate.tokens)?;
+        if planned.compact && !self.auto_blocked {
+            // One failed/useless attempt per turn. No loop and no tool replay.
+            self.auto_blocked = true;
+            let result = self
+                .compact_in_context(
+                    compaction::Options {
+                        keep_recent_tokens: planned.keep_recent_tokens,
+                        max_input_chars: planned.max_summary_chars,
+                        max_output_tokens: planned.summary_output_tokens,
+                    },
+                    origin,
+                )
+                .await;
+            match result {
+                Ok(compaction::Outcome::Compacted { .. }) => {}
+                Ok(compaction::Outcome::Unchanged) => {
+                    self.emit(EventKind::Warning(
+                        "Automatic compaction found no safe prefix to retire.",
+                    ));
+                }
+                Err(_) => {
+                    self.emit(EventKind::Warning(
+                        "Automatic compaction failed; the previous context is unchanged.",
+                    ));
+                }
+            }
+        }
+        let input = self
+            .estimated_context()
+            .map_or(estimate.tokens, |estimate| estimate.tokens);
+        let after = crate::budget::plan(limits, policy, input)?;
+        anyhow::ensure!(
+            after.fits,
+            "next model request exceeds the estimated context budget; reduce input or compact with a smaller recent target"
+        );
+        Ok(())
     }
 
     async fn complete_model(&self, origin: RequestOrigin) -> Result<model::Completion> {
@@ -221,7 +296,13 @@ impl Agent {
         mut turn: AgentTurn,
     ) -> Result<String> {
         self.messages.push(Message::User(prompt.to_owned()));
+        self.auto_blocked = false;
         loop {
+            if let Err(error) = self.prepare_request(turn.origin()).await {
+                self.publish_statistics();
+                turn.finish(TurnEnd::ContextBudgetFailed);
+                return Err(error);
+            }
             self.emit(EventKind::ModelStarted);
             // Only ModelClient retries HTTP. History changes and tool execution
             // stay outside it, for parent and child alike.

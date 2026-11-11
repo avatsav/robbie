@@ -46,6 +46,8 @@ mod diagnostics;
 
 mod requests;
 
+mod budgets;
+
 mod agent;
 
 mod retries;
