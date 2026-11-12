@@ -84,6 +84,8 @@ fn bodies(records: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+#[path = "automatic/repeated.rs"]
+mod repeated;
 #[path = "automatic/requests.rs"]
 mod requests;
 #[path = "automatic/safety.rs"]

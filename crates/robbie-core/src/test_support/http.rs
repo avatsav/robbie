@@ -40,6 +40,16 @@ pub struct Server {
 
 impl Server {
     pub fn new(replies: Vec<Reply>) -> Self {
+        let mut replies = VecDeque::from(replies);
+        Self::responding(move |_| {
+            replies
+                .pop_front()
+                .unwrap_or(Reply::Http(400, "", "unexpected request"))
+        })
+    }
+
+    /// Respond to captured requests, allowing fixtures to derive usage from body size.
+    pub fn responding(mut respond: impl FnMut(&str) -> Reply + Send + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}/messages", listener.local_addr().unwrap());
@@ -48,7 +58,6 @@ impl Server {
         let worker_requests = Arc::clone(&requests);
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
-            let mut replies = VecDeque::from(replies);
             'accept: while !worker_stop.load(Ordering::SeqCst) {
                 let (mut socket, _) = match listener.accept() {
                     Ok(pair) => pair,
@@ -86,14 +95,9 @@ impl Server {
                         }
                     }
                 }
-                worker_requests
-                    .lock()
-                    .unwrap()
-                    .push(String::from_utf8(request).unwrap());
-                let reply =
-                    replies
-                        .pop_front()
-                        .unwrap_or(Reply::Http(400, "", "unexpected request"));
+                let request = String::from_utf8(request).unwrap();
+                let reply = respond(&request);
+                worker_requests.lock().unwrap().push(request);
                 match reply {
                     Reply::Http(status, headers, body) => {
                         let response = format!(
