@@ -81,7 +81,10 @@ fn finishing_a_turn_preserves_the_next_draft_and_allows_submission_after_failure
         input: "first prompt".into(),
         ..App::default()
     };
-    assert_eq!(app.submit(), "first prompt");
+    assert_eq!(
+        app.submit(),
+        Some(Submission::Prompt("first prompt".into()))
+    );
     assert!(app.working);
     app.handle_event(Event::Paste("next draft".into()));
     app.finish_turn(Ok("answer".into()));
@@ -98,7 +101,7 @@ fn finishing_a_turn_preserves_the_next_draft_and_allows_submission_after_failure
         ))),
         InputAction::Submit
     );
-    assert_eq!(app.submit(), "next draft");
+    assert_eq!(app.submit(), Some(Submission::Prompt("next draft".into())));
     assert!(app.working);
     assert!(!app.failed);
     assert!(

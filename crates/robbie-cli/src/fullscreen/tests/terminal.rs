@@ -20,7 +20,7 @@ fn completed_read_terminal_fixture() {
                 let mut app = App::new("test/model");
                 workspace.apply_current(&mut app.content);
                 app.handle_event(Event::Paste("Read Cargo.toml and summarize dependencies".into()));
-                app.content.submit();
+                app.content.submit().unwrap();
                 let mut keys = EventStream::new();
                 let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
                 let work = async {

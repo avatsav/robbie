@@ -14,6 +14,10 @@ fn render_output(terminal: &mut Terminal<TestBackend>, app: &mut App) -> Result<
     Ok(())
 }
 
+mod commands;
+
+mod completion;
+
 mod input;
 
 mod presentation;

@@ -86,7 +86,10 @@ fn submitted_prompt_repeats_its_gutter_on_wrapped_rows() {
         input: "alpha beta gamma".into(),
         ..App::default()
     };
-    assert_eq!(app.submit(), "alpha beta gamma");
+    assert_eq!(
+        app.submit(),
+        Some(Submission::Prompt("alpha beta gamma".into()))
+    );
     let rows = app.pending[0].rows(12);
     assert_eq!(
         rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
@@ -104,7 +107,9 @@ fn submitted_prompt_keeps_literal_text_and_fits_tiny_widths() {
         input: "**literal**\n\n猫猫 abcdefghijklmnop\u{1b}".into(),
         ..App::default()
     };
-    let prompt = app.submit();
+    let Some(Submission::Prompt(prompt)) = app.submit() else {
+        panic!("expected ordinary prompt");
+    };
     assert!(
         prompt.ends_with('\u{1b}'),
         "display sanitizing must not change the submitted prompt"
@@ -137,7 +142,7 @@ fn submitted_prompt_has_an_aligned_orange_gutter_on_each_row() -> Result<()> {
         input: "alpha beta gamma".into(),
         ..App::default()
     };
-    app.submit();
+    app.submit().unwrap();
     let mut terminal = Terminal::new(TestBackend::new(12, 12))?;
     render_output(&mut terminal, &mut app)?;
     let buffer = terminal.backend().buffer();
@@ -190,7 +195,7 @@ fn only_assistant_text_is_markdown_and_child_blocks_keep_their_label() {
         input: "**literal prompt**".into(),
         ..App::default()
     };
-    app.submit();
+    app.submit().unwrap();
     assert_eq!(
         app.pending[0].rows(80)[0].to_string(),
         "▌ **literal prompt**"

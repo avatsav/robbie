@@ -14,9 +14,11 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     markdown::Markdown,
-    session::{AgentEvent, EventKind, TextAppend},
+    session::{AgentEvent, CompactionOutcome, EventKind, TextAppend},
 };
 
+mod commands;
+mod completion;
 mod footer;
 mod mascot;
 mod tool_display;
@@ -130,9 +132,16 @@ pub(super) enum InputAction {
     Quit,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Submission {
+    Prompt(String),
+    Compact,
+}
+
 #[derive(Default)]
 pub(super) struct App {
     input: String,
+    completion: completion::Completion,
     pending: Vec<OutputLine>,
     working: bool,
     model: String,
@@ -187,16 +196,54 @@ impl App {
         self.needs_text_separator = false;
     }
 
-    pub(super) fn submit(&mut self) -> String {
+    // Local help/errors return None; the host dispatches prompts and async actions.
+    pub(super) fn submit(&mut self) -> Option<Submission> {
         let prompt = std::mem::take(&mut self.input);
+        self.completion.edited();
         self.pending.push(OutputLine::UserPrompt {
             text: clean(&prompt),
         });
         self.blank();
+        match commands::parse(&prompt) {
+            Ok(Some(commands::Command::Help)) => {
+                self.notice(commands::help());
+                return None;
+            }
+            Ok(Some(commands::Command::Compact)) => return Some(Submission::Compact),
+            Err(message) => {
+                self.notice(format!("[error] {message}"));
+                return None;
+            }
+            Ok(None) => {}
+        }
         self.working = true;
         self.failed = false;
         self.mascot.set_activity(mascot::Activity::Thinking);
-        prompt
+        Some(Submission::Prompt(prompt))
+    }
+
+    pub(super) fn start_compaction(&mut self) {
+        self.working = true;
+        self.failed = false;
+        // Maintenance is not an agent turn: leave its mascot palette/scene alone.
+    }
+
+    pub(super) fn finish_compaction(&mut self, result: Result<CompactionOutcome>) {
+        self.working = false;
+        self.failed = result.is_err();
+        let message = match result {
+            Ok(CompactionOutcome::Compacted {
+                retired_messages,
+                retained_messages,
+            }) => format!(
+                "[compact] Compacted: retired {retired_messages} messages; retained {retained_messages} recent messages."
+            ),
+            Ok(CompactionOutcome::Unchanged) => {
+                "[compact] Unchanged: no safe prefix outside the recent-history target.".into()
+            }
+            Err(error) => format!("[compact] Failed; context unchanged: {error:#}"),
+        };
+        self.notice(message);
     }
 
     pub(super) fn finish_turn(&mut self, result: Result<String>) {
@@ -365,7 +412,11 @@ impl App {
         // Paste is inserted as text, never interpreted as submit/quit keys.
         if let Event::Paste(text) = event {
             self.mascot.interact();
-            self.input.push_str(&clean(&text).replace('\n', " "));
+            let text = clean(&text).replace('\n', " ");
+            if !text.is_empty() {
+                self.input.push_str(&text);
+                self.completion.edited();
+            }
             return InputAction::None;
         }
         let Event::Key(key) = event else {
@@ -408,16 +459,29 @@ impl App {
         {
             self.mascot.interact();
         }
+        // Busy Enter is not queued or used to accept a suggestion. Tab can still
+        // complete the next draft without executing it.
+        if key.code == KeyCode::Enter && self.working {
+            return InputAction::None;
+        }
+        if !key.modifiers.contains(KeyModifiers::ALT)
+            && self.completion.handle_key(&mut self.input, key.code)
+        {
+            self.mascot.interact();
+            return InputAction::None;
+        }
         match key.code {
             KeyCode::Enter if !self.input.trim().is_empty() => InputAction::Submit,
             KeyCode::Backspace => {
                 if let Some((start, _)) = self.input.grapheme_indices(true).next_back() {
                     self.input.truncate(start);
+                    self.completion.edited();
                 }
                 InputAction::None
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) && !c.is_control() => {
                 self.input.push(c);
+                self.completion.edited();
                 InputAction::None
             }
             _ => InputAction::None,

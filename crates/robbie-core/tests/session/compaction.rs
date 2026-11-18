@@ -67,6 +67,8 @@ fn request_bodies(root: &Path) -> Vec<Value> {
 
 #[path = "compaction/lifecycle.rs"]
 mod lifecycle;
+#[path = "compaction/options.rs"]
+mod options;
 #[path = "compaction/recording.rs"]
 mod recording;
 #[path = "compaction/requests.rs"]

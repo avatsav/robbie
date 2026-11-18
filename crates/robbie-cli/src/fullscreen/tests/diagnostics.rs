@@ -34,8 +34,10 @@ impl Fixture {
             ..App::default()
         };
         app.handle_event(Event::Paste(PROMPT.into()));
-        let prompt = app.content.submit();
-        assert_eq!(prompt, PROMPT);
+        assert_eq!(
+            app.content.submit(),
+            Some(Submission::Prompt(PROMPT.into()))
+        );
         Self {
             session,
             receiver,

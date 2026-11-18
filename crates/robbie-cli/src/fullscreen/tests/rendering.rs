@@ -5,7 +5,7 @@ fn fullscreen_preserves_banner_and_conversation_styling() -> Result<()> {
     use ratatui::style::{Color, Modifier};
     let mut app = App::new("test/model");
     app.handle_event(Event::Paste("user prompt".into()));
-    app.content.submit();
+    app.content.submit().unwrap();
     assistant(&mut app, "assistant answer");
     let mut terminal = Terminal::new(TestBackend::new(100, 24))?;
     terminal.draw(|frame| app.view(frame))?;

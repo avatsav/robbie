@@ -8,8 +8,10 @@ async fn sequential_ui_turns_reset_counts_and_text_sequence_without_reusing_turn
     for i in 0..2 {
         if i == 1 {
             fixture.app.handle_event(Event::Paste(PROMPT.into()));
-            let prompt = fixture.app.content.submit();
-            assert_eq!(prompt, PROMPT);
+            assert_eq!(
+                fixture.app.content.submit(),
+                Some(Submission::Prompt(PROMPT.into()))
+            );
         }
         let result = fixture.run().await;
         fixture.consume(false);
@@ -87,7 +89,9 @@ async fn exhausted_rate_limit_retries_allow_the_next_user_message_to_complete() 
         InputAction::Submit,
         "retry exhaustion must not lock the input for the rest of the session"
     );
-    let prompt = fixture.app.content.submit();
+    let Some(Submission::Prompt(prompt)) = fixture.app.content.submit() else {
+        panic!("expected ordinary prompt");
+    };
     assert_eq!(prompt, "next prompt");
     let result = tokio::time::timeout(Duration::from_secs(5), fixture.run_prompt(&prompt))
         .await

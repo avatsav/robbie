@@ -82,7 +82,10 @@ fn submit_skips_sleep_and_wake_and_drafting_never_interrupts_activity_or_complet
         ))),
         InputAction::Submit
     );
-    assert_eq!(app.submit(), "next task");
+    assert_eq!(
+        app.submit(),
+        Some(crate::ui::Submission::Prompt("next task".into()))
+    );
     assert_eq!(app.mascot.moment(Instant::now()).expression, E::Thinking);
     for activity in [
         Activity::Thinking,
@@ -103,9 +106,45 @@ fn submit_skips_sleep_and_wake_and_drafting_never_interrupts_activity_or_complet
     // A prompt that interrupts completion advances color once, not once per
     // keystroke, and goes straight to thinking rather than waking first.
     let palette = app.mascot.palette_index;
-    app.submit();
+    app.submit().unwrap();
     assert_eq!(app.mascot.palette_index, (palette + 1) % PALETTES.len());
     assert_eq!(app.mascot.moment(Instant::now()).expression, E::Thinking);
+}
+
+#[test]
+fn local_commands_do_not_start_turn_animations_or_advance_the_palette() {
+    for images in [false, true] {
+        for activity in [Activity::Idle, Activity::Success, Activity::Error] {
+            for command in ["/help", "/help extra", "/unknown"] {
+                let mut app = App {
+                    mascot: mascot(images),
+                    ..App::default()
+                };
+                app.mascot.set_activity(activity);
+                let palette = app.mascot.palette_index;
+                app.handle_event(Event::Paste(command.into()));
+                assert!(app.submit().is_none());
+                assert_eq!(app.mascot.activity, activity);
+                assert_eq!(app.mascot.palette_index, palette);
+            }
+        }
+    }
+}
+
+#[test]
+fn compact_maintenance_does_not_start_a_turn_scene_or_advance_its_palette() {
+    for activity in [Activity::Idle, Activity::Success, Activity::Error] {
+        let mut app = App::default();
+        app.mascot.set_activity(activity);
+        let palette = app.mascot.palette_index;
+        app.handle_event(Event::Paste("/compact".into()));
+        assert_eq!(app.submit(), Some(crate::ui::Submission::Compact));
+        app.start_compaction();
+        assert_eq!(app.mascot.activity, activity);
+        app.finish_compaction(Ok(crate::session::CompactionOutcome::Unchanged));
+        assert_eq!(app.mascot.activity, activity);
+        assert_eq!(app.mascot.palette_index, palette);
+    }
 }
 
 #[test]

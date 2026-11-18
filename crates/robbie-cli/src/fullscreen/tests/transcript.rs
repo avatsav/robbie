@@ -132,7 +132,10 @@ fn submitted_prompt_gutter_reflows_with_retained_history() -> Result<()> {
     use ratatui::style::Color;
     let mut app = App::default();
     app.handle_event(Event::Paste("alpha beta gamma".into()));
-    assert_eq!(app.content.submit(), "alpha beta gamma");
+    assert_eq!(
+        app.content.submit(),
+        Some(Submission::Prompt("alpha beta gamma".into()))
+    );
     for width in [80, 12, 80, 12] {
         let mut terminal = Terminal::new(TestBackend::new(width, 12))?;
         terminal.draw(|frame| app.view(frame))?;

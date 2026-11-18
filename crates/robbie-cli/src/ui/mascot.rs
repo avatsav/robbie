@@ -356,7 +356,7 @@ mod animation_tests {
 
         let mut app = crate::ui::App::default();
         assert_eq!(app.mascot.activity, Activity::Idle);
-        app.submit();
+        app.submit().unwrap();
         assert_eq!(app.mascot.activity, Activity::Thinking);
         app.activity(AgentEvent {
             source: "main",
@@ -397,7 +397,7 @@ mod animation_tests {
         assert_eq!(app.mascot.activity, Activity::Thinking);
         app.finish_turn(Ok("done".into()));
         assert_eq!(app.mascot.activity, Activity::Success);
-        app.submit();
+        app.submit().unwrap();
         assert_eq!(app.mascot.activity, Activity::Thinking);
         app.finish_turn(Err(anyhow::anyhow!("request failed")));
         assert_eq!(app.mascot.activity, Activity::Error);

@@ -32,7 +32,10 @@ async fn model_recorder_failure_becomes_one_visible_notice_without_losing_the_dr
         ))),
         InputAction::Submit
     );
-    assert_eq!(app.content.submit(), "my next draft");
+    assert_eq!(
+        app.content.submit(),
+        Some(Submission::Prompt("my next draft".into()))
+    );
 }
 
 #[test]
@@ -51,7 +54,10 @@ fn input_paste_quit_and_failed_sessions_use_shared_behavior() {
         app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE)),
         InputAction::Submit
     );
-    assert_eq!(app.content.submit(), "hello 猫");
+    assert_eq!(
+        app.content.submit(),
+        Some(Submission::Prompt("hello 猫".into()))
+    );
     app.finish_turn(Err(anyhow::anyhow!("model failed")));
     app.handle_event(Event::Paste("another prompt".into()));
     assert_eq!(

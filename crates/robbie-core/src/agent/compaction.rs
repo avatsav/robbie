@@ -11,7 +11,7 @@ use crate::{
 mod summary;
 mod transaction;
 
-/// Explicit limits for one manual compaction. There are no runtime defaults.
+/// Explicit limits for one manual compaction, optionally derived with `for_model`.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// Approximate recent-token target, not the model's context window.
@@ -24,6 +24,30 @@ pub struct Options {
 }
 
 impl Options {
+    /// Derive bounded defaults from known model limits without enabling automatic compaction.
+    /// Uses the shared recent-history/output targets and safety headroom. Character
+    /// estimates are heuristic; the encoded summary request is checked again before HTTP.
+    ///
+    /// # Errors
+    /// Invalid limits or insufficient input/output headroom return an error.
+    pub fn for_model(limits: crate::ModelLimits) -> Result<Self> {
+        let planned = crate::budget::plan(
+            limits,
+            crate::CompactionPolicy {
+                enabled: false,
+                // An explicit action has no automatic trigger reserve.
+                reserve_tokens: 0,
+                ..crate::CompactionPolicy::default()
+            },
+            0,
+        )?;
+        Ok(Self {
+            keep_recent_tokens: planned.keep_recent_tokens,
+            max_input_chars: planned.max_summary_chars,
+            max_output_tokens: planned.summary_output_tokens,
+        })
+    }
+
     fn limits(self) -> Result<transaction::Limits> {
         ensure!(
             self.max_input_chars > 0,

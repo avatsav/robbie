@@ -1,6 +1,6 @@
 # Context compaction
 
-Compaction is in-memory and supports **OpenRouter + Anthropic Messages**. The CLI enables automatic checks for parent and child conversations independently. The core also exposes explicit `Session::compact(options)`. There is no terminal compaction command, persistence/resumption or context-overflow retry.
+Compaction is in-memory and supports **OpenRouter + Anthropic Messages**. The CLI enables automatic checks for parent and child conversations independently. The CLI also supports explicit `/compact`; core callers use `Session::compact(options)`. There is no persistence/resumption or context-overflow retry.
 
 ## Settings
 
@@ -19,7 +19,13 @@ Defaults:
 
 Invalid or impossible enabled budgets fail configuration. Small windows may require a smaller core policy or CLI opt-out.
 
+`/compact` takes no arguments and requires known session model limits. It works with automatic compaction disabled, using the bounded recent-history and summary-output defaults above, without an automatic trigger threshold. Unknown capacity or insufficient headroom fails locally before a summary request. For unknown capacity, configure a verified context-window override and restart; do not guess a larger window. Core callers can derive the same options with `CompactionOptions::for_model(limits)` or supply explicit limits.
+
 ## Runtime behavior
+
+Submit `/compact` while idle to run one explicit compaction operation. It reports **compacted** (with retired/retained message counts), **unchanged** (no eligible prefix), or **failed** (context preserved). A summary request may be billed and uses the existing bounded HTTP retries. The command is not added to model history, runs no tools, and creates no agent turn or automatic follow-up prompt. Explicit lifecycle records have no agent-turn link.
+
+During the operation, the Working indicator, drafting, scrolling and display shortcuts remain available; Enter is ignored, not queued for later execution. A draft survives completion. Ctrl+C quits and drops pending work; local context is preserved if the transaction has not committed, but upstream work/billing cannot be undone. The command does not start a mascot turn animation or advance its palette.
 
 Before each ordinary request, including a new prompt or a completed tool-result batch, Robbie estimates the next input. It uses the latest usable ordinary-response input plus output and estimates appended messages. Without a valid baseline, or after compaction/prompt changes, it estimates the encoded system, tools, latest summary and raw history. Estimates use serialized Unicode characters / 4, rounded up; this is not exact tokenization.
 
@@ -37,4 +43,4 @@ The footer shows session input/output/cache-read/cache-write totals at left and 
 
 Metadata can be stale or aggregate rather than an exact routed-server limit. Usage can be missing, and character estimates can undercount or overcount. None of these checks guarantees provider acceptance or summary fidelity.
 
-A huge first prompt or protected recent exchange may not fit and cannot be shrunk by prefix compaction. There is no recursive summarization, destructive output pruning or hidden recovery loop. With no CLI history-editing command, restart with less input if automatic compaction cannot free enough space; core callers may explicitly compact with a smaller recent target.
+A huge first prompt or protected recent exchange may not fit and cannot be shrunk by prefix compaction. There is no recursive summarization, destructive output pruning or hidden recovery loop. If `/compact` with its default recent target cannot free enough space, restart with less input; core callers may explicitly compact with a smaller recent target.

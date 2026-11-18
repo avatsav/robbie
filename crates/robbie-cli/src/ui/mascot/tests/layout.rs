@@ -10,7 +10,7 @@ fn ctrl_g_toggles_both_renderers_idle_and_busy_without_changing_the_draft_or_ani
         };
         for busy in [false, true] {
             if busy {
-                app.submit();
+                app.submit().unwrap();
                 app.input = "keep this draft".into();
             }
             let started = app.mascot.started;
@@ -75,6 +75,7 @@ fn both_renderers_leave_bottom_rule_transcript_draft_and_cursor_intact() {
             - GUTTER;
         for input in [
             "draft".into(),
+            "/co".into(),
             "a".repeat(input_width as usize),
             "猫e\u{301} ".repeat(100),
         ] {

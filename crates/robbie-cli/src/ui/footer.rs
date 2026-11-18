@@ -36,7 +36,7 @@ impl App {
         (input_height, headroom)
     }
 
-    pub(crate) fn live_height(&self, width: u16, terminal_height: u16) -> u16 {
+    fn panel_height(&self, width: u16, terminal_height: u16) -> u16 {
         let (input_height, headroom) = self.mascot_input_layout(width);
         // Keep at least four transcript rows rather than squeezing in a mascot.
         if self.mascot.is_visible()
@@ -52,6 +52,16 @@ impl App {
         }
     }
 
+    fn completion_height(&self, width: u16, terminal_height: u16) -> u16 {
+        let available =
+            terminal_height.saturating_sub(self.panel_height(width, terminal_height) + 4);
+        self.completion.height(&self.input, width, available)
+    }
+
+    pub(crate) fn live_height(&self, width: u16, terminal_height: u16) -> u16 {
+        self.panel_height(width, terminal_height) + self.completion_height(width, terminal_height)
+    }
+
     fn activity_title(&self) -> (String, bool) {
         if !self.working {
             return (String::new(), false);
@@ -64,6 +74,24 @@ impl App {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        // Suggestions occupy their own rows above the entire input panel,
+        // including image-mode hop headroom. Never overlay transcript or mascot.
+        let menu_height = self
+            .completion_height(area.width, frame.area().height)
+            .min(area.height.saturating_sub(5));
+        let menu_height = if menu_height >= 3 { menu_height } else { 0 };
+        self.completion.view(
+            frame,
+            Rect::new(area.x, area.y, area.width, menu_height),
+            &self.input,
+            self.working,
+        );
+        let area = Rect::new(
+            area.x,
+            area.y + menu_height,
+            area.width,
+            area.height - menu_height,
+        );
         let (title, busy) = self.activity_title();
         let color = if self.failed {
             MUTED_RED
@@ -311,7 +339,7 @@ mod tests {
     #[test]
     fn activity_label_stays_unchanged_between_model_and_parent_or_child_tools() {
         let mut app = App::default();
-        app.submit();
+        app.submit().unwrap();
         let working = screen(&app, 100, 5);
         for source in ["main", "subagent"] {
             for kind in [
@@ -342,7 +370,7 @@ mod tests {
             Err(anyhow::anyhow!("request failed")),
         ] {
             let mut app = App::default();
-            app.submit();
+            app.submit().unwrap();
             app.finish_turn(result);
             let text = screen(&app, 100, 5);
             assert!(text.starts_with(&"─".repeat(100)));

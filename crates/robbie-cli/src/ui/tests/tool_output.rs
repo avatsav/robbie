@@ -7,7 +7,7 @@ fn conversation_has_priority_over_muted_single_line_tools() -> Result<()> {
         input: "user prompt".into(),
         ..App::default()
     };
-    app.submit();
+    app.submit().unwrap();
     assert_eq!(app.pending[0].rows(80)[0].style.fg, Some(USER_ORANGE));
     assert!(
         !app.pending[0].rows(80)[0]

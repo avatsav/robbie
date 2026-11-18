@@ -1,6 +1,8 @@
 use super::*;
 
 #[cfg(unix)]
+mod commands;
+#[cfg(unix)]
 mod diagnostics;
 use crate::session::EventKind;
 use crossterm::event::{KeyEvent, KeyModifiers, MouseEvent};
@@ -68,3 +70,5 @@ mod transcript;
 mod lifecycle;
 
 mod rendering;
+
+mod completion;

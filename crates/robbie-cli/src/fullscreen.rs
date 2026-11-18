@@ -23,7 +23,7 @@ use crate::{
     session::{
         AgentEvent, EventKind, FrontendEnd as UiEnd, FrontendTurn as UiTurn, Recording, Session,
     },
-    ui::{self, InputAction, OutputLine},
+    ui::{self, InputAction, OutputLine, Submission},
 };
 
 mod selection;
@@ -380,8 +380,32 @@ async fn run_app(
             InputAction::None => continue,
             InputAction::Submit => {}
         }
-        let prompt = app.content.submit();
+        let submission = app.content.submit();
         app.scroll_back = 0;
+        let prompt = match submission {
+            None => continue,
+            Some(Submission::Prompt(prompt)) => prompt,
+            Some(Submission::Compact) => {
+                app.content.start_compaction();
+                match run_turn(
+                    terminal,
+                    &mut app,
+                    &mut keys,
+                    receiver,
+                    &mut workspace,
+                    compact_session(session),
+                )
+                .await?
+                {
+                    TurnOutcome::Finished(result) => {
+                        app.content.finish_compaction(result);
+                        app.recording_warning();
+                    }
+                    TurnOutcome::Quit => return Ok(()),
+                }
+                continue;
+            }
+        };
         let turn = session.prepare_turn();
         app.ui_turn = Some(turn.record_frontend(&prompt));
         match run_turn(
@@ -405,6 +429,17 @@ async fn run_app(
             }
         }
     }
+}
+
+// No turn preparation or prompt append: this is an explicit session transaction.
+async fn compact_session(session: &mut Session) -> Result<crate::session::CompactionOutcome> {
+    let limits = session
+        .model_limit_resolution()
+        .and_then(|resolution| resolution.limits)
+        .context("model context limit is unknown; set ROBBIE_CONTEXT_WINDOW and restart")?;
+    session
+        .compact(crate::session::CompactionOptions::for_model(limits)?)
+        .await
 }
 
 // Present text, first-use image uploads, and image placements together rather
@@ -441,21 +476,21 @@ async fn wait_for_input(
     }
 }
 
-enum TurnOutcome {
-    Finished(Result<String>),
+enum TurnOutcome<T> {
+    Finished(Result<T>),
     Quit,
 }
 
 // Keep the busy UI loop independent of the work it drives, so blocked-tool
 // responsiveness can be exercised without calling a model.
-async fn run_turn(
+async fn run_turn<T>(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     keys: &mut EventStream,
     receiver: &mut UnboundedReceiver<AgentEvent>,
     workspace: &mut ui::WorkspaceMonitor,
-    run: impl std::future::Future<Output = Result<String>>,
-) -> Result<TurnOutcome> {
+    run: impl std::future::Future<Output = Result<T>>,
+) -> Result<TurnOutcome<T>> {
     tokio::pin!(run);
     let mut ticks = tokio::time::interval(ui::ANIMATION_TICK);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
