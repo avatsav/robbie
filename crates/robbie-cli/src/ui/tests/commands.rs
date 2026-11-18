@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn local_commands_echo_and_clear_the_draft_without_starting_work() {
     for (input, expected) in [
-        ("/help", "Commands (case-sensitive):"),
+        ("/help", "commands"),
         ("/help extra", "[error] Usage: /help"),
         ("/compact extra", "[error] Usage: /compact"),
         ("/unknown", "[error] Unknown command."),

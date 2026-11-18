@@ -43,6 +43,36 @@ fn fullscreen_preserves_banner_and_conversation_styling() -> Result<()> {
 }
 
 #[test]
+fn styled_help_is_retained_and_reflows_through_the_fullscreen_transcript() -> Result<()> {
+    let mut app = App::default();
+    app.handle_event(Event::Paste("/help".into()));
+    assert!(app.content.submit().is_none());
+    assert!(app.ui_turn.is_none());
+    let wide = app.rows(100);
+    assert!(app.rows(18).len() > wide.len());
+    assert_eq!(app.rows(100), wide);
+    for (width, height) in [(100, 40), (18, 12), (1, 1), (100, 40)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+        terminal.draw(|frame| app.view(frame))?;
+        if width == 100 {
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("commands"));
+            assert!(text.contains("shortcuts"));
+            assert!(text.contains("alias for /exit"));
+            assert!(!text.contains("Working…"));
+        }
+    }
+    assert_eq!(app.rows(100), wide);
+    Ok(())
+}
+
+#[test]
 fn renders_at_normal_and_tiny_sizes_and_clamps_scroll() -> Result<()> {
     for (width, height) in [(80, 24), (10, 5), (1, 1)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height))?;

@@ -20,6 +20,7 @@ use crate::{
 mod commands;
 mod completion;
 mod footer;
+mod help;
 mod mascot;
 mod tool_display;
 mod usage;
@@ -74,6 +75,7 @@ pub(super) enum OutputLine {
         text: String,
     },
     Wrapped(StyledLine),
+    HelpEntry(help::Entry),
     Markdown(Markdown),
     Tool {
         summary: String,
@@ -91,6 +93,7 @@ impl OutputLine {
             Self::Banner { model } => banner_rows(model, width),
             Self::UserPrompt { text } => user_prompt_rows(text, width),
             Self::Markdown(markdown) => markdown.rows(width),
+            Self::HelpEntry(entry) => entry.rows(width),
             Self::Wrapped((text, style)) => crate::terminal_text::wrap(text, width.max(1))
                 .into_iter()
                 .map(|line| Line::styled(line.to_string(), *style))
@@ -114,6 +117,7 @@ impl OutputLine {
             Self::UserPrompt { text } => text,
             Self::Wrapped((text, _)) => text,
             Self::Markdown(markdown) => markdown.source(),
+            Self::HelpEntry(entry) => &entry.description,
             Self::Tool { summary, .. } => summary,
             Self::ToolOutput { text, .. } => text,
         }
@@ -207,7 +211,7 @@ impl App {
         self.blank();
         match commands::parse(&prompt) {
             Ok(Some(commands::Command::Help)) => {
-                self.notice(commands::help());
+                self.show_help();
                 return None;
             }
             Ok(Some(commands::Command::Compact)) => return Some(Submission::Compact),

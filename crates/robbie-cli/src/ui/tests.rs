@@ -18,6 +18,8 @@ mod commands;
 
 mod completion;
 
+mod help;
+
 mod input;
 
 mod presentation;

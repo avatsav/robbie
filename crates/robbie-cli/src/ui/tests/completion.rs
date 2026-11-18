@@ -40,11 +40,7 @@ fn enter_completes_a_prefix_but_submits_an_already_complete_command() {
     paste(&mut app, "/help");
     assert_eq!(key(&mut app, KeyCode::Enter), InputAction::Submit);
     assert!(app.submit().is_none());
-    assert!(
-        app.pending
-            .iter()
-            .any(|line| line.text().contains("Commands (case-sensitive):"))
-    );
+    assert!(app.pending.iter().any(|line| line.text() == "commands"));
 }
 
 #[test]

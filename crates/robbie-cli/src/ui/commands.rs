@@ -18,10 +18,6 @@ impl Definition {
     pub(super) fn names(&self) -> impl Iterator<Item = &'static str> {
         std::iter::once(self.name).chain(self.aliases.iter().copied())
     }
-
-    pub(super) fn label(&self) -> String {
-        self.names().collect::<Vec<_>>().join(", ")
-    }
 }
 
 // One fixed list for execution, help, and completion; not a runtime registry.
@@ -45,19 +41,6 @@ pub(super) const COMMANDS: &[Definition] = &[
         description: "exit Robbie",
     },
 ];
-
-pub(super) fn help() -> String {
-    let mut text = String::from("Commands (case-sensitive):\n");
-    for definition in COMMANDS {
-        text.push_str(&format!(
-            "{} — {}\n",
-            definition.label(),
-            definition.description
-        ));
-    }
-    text.push_str("\n↑/↓ choose a suggestion; Tab or Enter fills it; Enter runs a complete command; Esc closes suggestions.\nA leading / selects a command. To discuss a path, start with text, e.g. explain /tmp/file.\nCtrl+C also exits; Ctrl+O cycles tool output; Ctrl+G toggles the mascot.");
-    text
-}
 
 // None means an ordinary prompt; an error is still local command input.
 pub(super) fn parse(input: &str) -> Result<Option<Command>, &'static str> {
@@ -86,18 +69,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_suggested_command_is_executable_and_described_in_help() {
-        let help = help();
+    fn every_suggested_name_is_executable() {
         for definition in COMMANDS {
             for name in definition.names() {
                 assert_eq!(parse(name), Ok(Some(definition.command)), "{name}");
-                assert!(help.contains(name), "{name}");
             }
-            assert!(help.contains(&format!(
-                "{} — {}",
-                definition.label(),
-                definition.description
-            )));
         }
     }
 
@@ -129,13 +105,6 @@ mod tests {
         for input in ["/exit now", "/quit\nextra"] {
             assert_eq!(parse(input), Err("Usage: /exit (or /quit)"));
         }
-    }
-
-    #[test]
-    fn aliases_are_listed_in_help_without_duplicate_command_rows() {
-        let help = help();
-        assert!(help.contains("/exit, /quit — exit Robbie"));
-        assert_eq!(help.matches(" — exit Robbie").count(), 1);
     }
 
     #[test]

@@ -169,7 +169,11 @@ async fn local_commands_stay_out_of_agent_turns_recording_and_conversation_histo
             assert!(events(&records, event).is_empty(), "{event}");
         }
         let text = history(&mut app);
-        assert!(text.contains("/help — show this help"));
+        assert!(
+            text.lines()
+                .any(|line| line.trim_start().starts_with("/help ")
+                    && line.contains("show this help"))
+        );
         assert!(text.contains("[error] Unknown command."));
 
         // Use the same ordinary-prompt path as the host after the local commands.
