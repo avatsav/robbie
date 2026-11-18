@@ -129,6 +129,14 @@ async fn autocomplete_acceptance_does_not_prepare_a_turn_or_execute_compaction()
     assert_eq!(app.content.submit(), Some(Submission::Compact));
 }
 
+#[test]
+fn exit_command_dispatches_locally_without_a_turn() {
+    let mut app = App::default();
+    app.handle_event(Event::Paste("/quit".into()));
+    assert_eq!(app.content.submit(), Some(Submission::Exit));
+    assert!(app.ui_turn.is_none());
+}
+
 #[tokio::test]
 async fn local_commands_stay_out_of_agent_turns_recording_and_conversation_history() {
     for transcript in [false, true] {
@@ -150,7 +158,7 @@ async fn local_commands_stay_out_of_agent_turns_recording_and_conversation_histo
             recorder: Some(session.recording()),
             ..App::default()
         };
-        for command in ["/help", "/help extra", "/unknown"] {
+        for command in ["/help", "/help extra", "/unknown", "/exit extra"] {
             app.handle_event(Event::Paste(command.into()));
             assert!(app.content.submit().is_none());
             assert!(app.ui_turn.is_none());

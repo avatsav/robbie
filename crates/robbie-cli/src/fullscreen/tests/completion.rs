@@ -27,12 +27,14 @@ fn menu_is_highlighted_above_the_input_without_entering_the_transcript_or_moving
     terminal.draw(|frame| app.view(frame)).unwrap();
     let rows = screen(&terminal);
     let menu_y = app.history_area.bottom();
-    assert_eq!(app.history_area.height, height_before - 4);
+    assert_eq!(app.history_area.height, height_before - 5);
     assert!(rows[menu_y as usize].contains("Commands"));
     assert!(rows[menu_y as usize + 1].contains("› /help"));
     assert!(rows[menu_y as usize + 2].contains("/compact"));
     assert!(rows[menu_y as usize + 2].contains("billed summary request"));
-    assert!(rows[menu_y as usize + 3].contains("Tab/Enter fill"));
+    assert!(rows[menu_y as usize + 3].contains("/exit"));
+    assert!(rows[menu_y as usize + 3].contains("exit Robbie"));
+    assert!(rows[menu_y as usize + 4].contains("Tab/Enter fill"));
     let buffer = terminal.backend().buffer();
     assert_ne!(buffer[(1, menu_y + 1)].bg, buffer[(1, menu_y + 2)].bg);
     assert_eq!(terminal.get_cursor_position().unwrap().y, cursor_before.y);

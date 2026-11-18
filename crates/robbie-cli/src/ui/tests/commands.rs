@@ -58,6 +58,18 @@ fn an_ordinary_prompt_after_a_command_starts_work_and_preserves_literal_text() {
 }
 
 #[test]
+fn exit_is_local_and_starts_no_work() {
+    for command in ["/exit", "  /quit  "] {
+        let mut app = App::default();
+        app.handle_event(Event::Paste(command.into()));
+        assert_eq!(app.submit(), Some(Submission::Exit));
+        assert!(app.input.is_empty());
+        assert!(!app.working);
+        assert_eq!(app.pending[0].text(), command);
+    }
+}
+
+#[test]
 fn compact_is_typed_session_work_not_a_model_prompt() {
     let mut app = App::default();
     app.handle_event(Event::Paste("  /compact  ".into()));

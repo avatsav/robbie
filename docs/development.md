@@ -25,7 +25,7 @@ Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` in `.env` or your shell, then:
 cargo run --locked
 ```
 
-Press Ctrl+C to exit. Restart after changing environment variables.
+Press Ctrl+C or submit `/exit` (alias `/quit`) to exit. Restart after changing environment variables.
 
 ## Checks
 

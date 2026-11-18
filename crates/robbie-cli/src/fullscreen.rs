@@ -384,6 +384,7 @@ async fn run_app(
         app.scroll_back = 0;
         let prompt = match submission {
             None => continue,
+            Some(Submission::Exit) => return Ok(()),
             Some(Submission::Prompt(prompt)) => prompt,
             Some(Submission::Compact) => {
                 app.content.start_compaction();

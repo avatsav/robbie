@@ -16,7 +16,7 @@ fn typing_slash_opens_suggestions_and_tab_only_fills_the_selected_command() {
     let mut app = App::default();
     let base = app.live_height(100, 30);
     assert_eq!(key(&mut app, KeyCode::Char('/')), InputAction::None);
-    assert_eq!(app.live_height(100, 30), base + 4);
+    assert_eq!(app.live_height(100, 30), base + 5);
     key(&mut app, KeyCode::Down);
     assert_eq!(key(&mut app, KeyCode::Tab), InputAction::None);
     assert_eq!(app.input, "/compact");
@@ -48,10 +48,24 @@ fn enter_completes_a_prefix_but_submits_an_already_complete_command() {
 }
 
 #[test]
+fn aliases_complete_and_submit_as_the_alias_typed() {
+    for (prefix, expected) in [("/q", "/quit"), ("/qu", "/quit"), ("/e", "/exit")] {
+        let mut app = App::default();
+        paste(&mut app, prefix);
+        assert_eq!(key(&mut app, KeyCode::Tab), InputAction::None);
+        assert_eq!(app.input, expected);
+    }
+    let mut app = App::default();
+    paste(&mut app, "/quit");
+    assert_eq!(key(&mut app, KeyCode::Enter), InputAction::Submit);
+    assert_eq!(app.submit(), Some(Submission::Exit));
+}
+
+#[test]
 fn up_and_down_wrap_and_editing_resets_the_selection_before_filtering() {
     for (arrows, expected) in [
-        (vec![KeyCode::Up], "/compact"),
-        (vec![KeyCode::Down, KeyCode::Down], "/help"),
+        (vec![KeyCode::Up], "/exit"),
+        (vec![KeyCode::Down, KeyCode::Down], "/exit"),
         (vec![KeyCode::Down, KeyCode::Up], "/help"),
     ] {
         let mut app = App::default();

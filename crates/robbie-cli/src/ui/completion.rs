@@ -29,14 +29,20 @@ impl Completion {
         *self = Self::default();
     }
 
-    fn candidates(&self, input: &str) -> Vec<&'static Definition> {
+    // Each row carries the name that matched, so an alias completes as itself.
+    fn candidates(&self, input: &str) -> Vec<(&'static str, &'static Definition)> {
         let prefix = input.trim_start();
         if self.dismissed || !prefix.starts_with('/') || prefix.chars().any(char::is_whitespace) {
             return Vec::new();
         }
         COMMANDS
             .iter()
-            .filter(|definition| definition.name.starts_with(prefix))
+            .filter_map(|definition| {
+                definition
+                    .names()
+                    .find(|name| name.starts_with(prefix))
+                    .map(|name| (name, definition))
+            })
             .collect()
     }
 
@@ -52,11 +58,11 @@ impl Completion {
             KeyCode::Up => self.selected = (selected + candidates.len() - 1) % candidates.len(),
             KeyCode::Down => self.selected = (selected + 1) % candidates.len(),
             KeyCode::Esc => self.dismissed = true,
-            KeyCode::Enter if input.trim_start() == candidates[selected].name => return false,
+            KeyCode::Enter if input.trim_start() == candidates[selected].0 => return false,
             KeyCode::Tab | KeyCode::Enter => {
                 let leading = input.len() - input.trim_start().len();
                 input.truncate(leading);
-                input.push_str(candidates[selected].name);
+                input.push_str(candidates[selected].0);
                 self.dismissed = true;
             }
             _ => return false,
@@ -89,7 +95,7 @@ impl Completion {
             ..area
         };
         let selected = self.selected.min(candidates.len() - 1);
-        let complete = input.trim_start() == candidates[selected].name;
+        let complete = input.trim_start() == candidates[selected].0;
         let hint = match (area.width >= 54, busy, complete) {
             (true, true, _) => " ↑↓ choose · Tab fill · Esc close (busy) ",
             (true, false, true) => " ↑↓ choose · Tab fill · Enter run · Esc close ",
@@ -108,7 +114,7 @@ impl Completion {
         frame.render_widget(block, area);
         // A short viewport must still show the selected candidate.
         let first = selected.saturating_sub(inner.height.saturating_sub(1) as usize);
-        for (row, definition) in candidates
+        for (row, (candidate, definition)) in candidates
             .iter()
             .skip(first)
             .take(inner.height as usize)
@@ -117,7 +123,7 @@ impl Completion {
             let active = first + row == selected;
             let style = Style::new().bg(if active { SELECTED } else { BACKGROUND });
             let name = single_line(
-                &format!("{}{}", if active { "› " } else { "  " }, definition.name),
+                &format!("{}{}", if active { "› " } else { "  " }, candidate),
                 inner.width as usize,
             );
             let remaining = (inner.width as usize).saturating_sub(name.width());

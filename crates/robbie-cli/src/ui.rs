@@ -136,6 +136,7 @@ pub(super) enum InputAction {
 pub(super) enum Submission {
     Prompt(String),
     Compact,
+    Exit,
 }
 
 #[derive(Default)]
@@ -210,6 +211,7 @@ impl App {
                 return None;
             }
             Ok(Some(commands::Command::Compact)) => return Some(Submission::Compact),
+            Ok(Some(commands::Command::Exit)) => return Some(Submission::Exit),
             Err(message) => {
                 self.notice(format!("[error] {message}"));
                 return None;
