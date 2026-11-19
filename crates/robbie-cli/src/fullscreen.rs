@@ -386,6 +386,17 @@ async fn run_app(
             None => continue,
             Some(Submission::Exit) => return Ok(()),
             Some(Submission::Prompt(prompt)) => prompt,
+            Some(Submission::Transcript) => {
+                let message = match session.dump_transcript() {
+                    Ok(path) => format!(
+                        "[transcript] Wrote sensitive model-context snapshot: {}",
+                        path.display()
+                    ),
+                    Err(error) => format!("[transcript] Failed: {error:#}"),
+                };
+                app.content.notice(message);
+                continue;
+            }
             Some(Submission::Compact) => {
                 app.content.start_compaction();
                 match run_turn(

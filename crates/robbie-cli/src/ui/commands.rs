@@ -3,6 +3,7 @@
 pub(super) enum Command {
     Help,
     Compact,
+    Transcript,
     Exit,
 }
 
@@ -35,6 +36,12 @@ pub(super) const COMMANDS: &[Definition] = &[
         description: "compact context (may make a billed summary request)",
     },
     Definition {
+        command: Command::Transcript,
+        name: "/transcript",
+        aliases: &["/dump"],
+        description: "write sensitive model context to .robbie/transcripts",
+    },
+    Definition {
         command: Command::Exit,
         name: "/exit",
         aliases: &["/quit"],
@@ -58,6 +65,7 @@ pub(super) fn parse(input: &str) -> Result<Option<Command>, &'static str> {
         return Err(match definition.command {
             Command::Help => "Usage: /help",
             Command::Compact => "Usage: /compact",
+            Command::Transcript => "Usage: /transcript (or /dump)",
             Command::Exit => "Usage: /exit (or /quit)",
         });
     }
@@ -94,6 +102,16 @@ mod tests {
         }
         for input in ["/compact now", "/compact\nextra"] {
             assert_eq!(parse(input), Err("Usage: /compact"));
+        }
+    }
+
+    #[test]
+    fn transcript_and_dump_are_the_same_argument_free_command() {
+        for input in ["/transcript", "  /dump\t", "\n/transcript\n"] {
+            assert_eq!(parse(input), Ok(Some(Command::Transcript)));
+        }
+        for input in ["/transcript now", "/dump\nextra"] {
+            assert_eq!(parse(input), Err("Usage: /transcript (or /dump)"));
         }
     }
 

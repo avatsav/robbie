@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::Cell, collections::HashMap};
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -19,6 +19,7 @@ use crate::{
 
 mod commands;
 mod completion;
+mod draft;
 mod footer;
 mod help;
 mod mascot;
@@ -140,12 +141,15 @@ pub(super) enum InputAction {
 pub(super) enum Submission {
     Prompt(String),
     Compact,
+    Transcript,
     Exit,
 }
 
 #[derive(Default)]
 pub(super) struct App {
-    input: String,
+    input: draft::Draft,
+    // Wrapped-row width from the latest draw, used by vertical cursor movement.
+    draft_width: Cell<usize>,
     completion: completion::Completion,
     pending: Vec<OutputLine>,
     working: bool,
@@ -203,7 +207,7 @@ impl App {
 
     // Local help/errors return None; the host dispatches prompts and async actions.
     pub(super) fn submit(&mut self) -> Option<Submission> {
-        let prompt = std::mem::take(&mut self.input);
+        let prompt = self.input.take();
         self.completion.edited();
         self.pending.push(OutputLine::UserPrompt {
             text: clean(&prompt),
@@ -215,6 +219,7 @@ impl App {
                 return None;
             }
             Ok(Some(commands::Command::Compact)) => return Some(Submission::Compact),
+            Ok(Some(commands::Command::Transcript)) => return Some(Submission::Transcript),
             Ok(Some(commands::Command::Exit)) => return Some(Submission::Exit),
             Err(message) => {
                 self.notice(format!("[error] {message}"));
@@ -420,7 +425,7 @@ impl App {
             self.mascot.interact();
             let text = clean(&text).replace('\n', " ");
             if !text.is_empty() {
-                self.input.push_str(&text);
+                self.input.insert(&text);
                 self.completion.edited();
             }
             return InputAction::None;
@@ -476,17 +481,37 @@ impl App {
             self.mascot.interact();
             return InputAction::None;
         }
+        let plain = !key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Enter if !self.input.trim().is_empty() => InputAction::Submit,
             KeyCode::Backspace => {
-                if let Some((start, _)) = self.input.grapheme_indices(true).next_back() {
-                    self.input.truncate(start);
-                    self.completion.edited();
-                }
+                self.input.backspace();
+                self.completion.edited();
                 InputAction::None
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) && !c.is_control() => {
-                self.input.push(c);
+            KeyCode::Delete if plain => {
+                self.input.delete();
+                self.completion.edited();
+                InputAction::None
+            }
+            KeyCode::Left if plain => {
+                self.input.left();
+                InputAction::None
+            }
+            KeyCode::Right if plain => {
+                self.input.right();
+                InputAction::None
+            }
+            KeyCode::Up if plain => {
+                self.input.up(self.draft_width.get());
+                InputAction::None
+            }
+            KeyCode::Down if plain => {
+                self.input.down(self.draft_width.get());
+                InputAction::None
+            }
+            KeyCode::Char(c) if plain && !c.is_control() => {
+                self.input.insert_char(c);
                 self.completion.edited();
                 InputAction::None
             }

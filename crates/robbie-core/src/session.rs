@@ -1,7 +1,12 @@
 //! Terminal-independent session ownership and host observations.
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result, ensure};
+use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::{
@@ -11,6 +16,8 @@ use crate::{
     skills::SkillRegistry,
     tools::ToolRegistry,
 };
+
+mod transcript;
 
 pub use crate::{
     agent::compaction::{Options as CompactionOptions, Outcome as CompactionOutcome},
@@ -59,6 +66,7 @@ impl Recording {
 pub struct Session {
     agent: Agent,
     recording: Recording,
+    workspace: PathBuf,
 }
 
 impl Session {
@@ -106,7 +114,7 @@ impl Session {
         let (events, receiver) = mpsc::unbounded_channel();
         let mut agent = Agent::new(
             model,
-            ToolRegistry::with_skills(skills, workspace),
+            ToolRegistry::with_skills(skills, workspace.clone()),
             events,
             "main",
         );
@@ -116,6 +124,7 @@ impl Session {
             Self {
                 agent,
                 recording: Recording { recorder },
+                workspace,
             },
             receiver,
         )
@@ -182,6 +191,35 @@ impl Session {
     /// ```
     pub async fn compact(&mut self, options: CompactionOptions) -> Result<CompactionOutcome> {
         self.agent.compact(options).await
+    }
+
+    /// Export the current root model context to `.robbie/transcripts/` in this
+    /// session's workspace, independently of journal configuration. The request
+    /// body preserves opaque assistant blocks and full tool results; it excludes
+    /// provider authentication/headers. After compaction it contains the latest
+    /// summary and retained tail, not the retired conversation or child histories.
+    ///
+    /// # Errors
+    /// Serialization/storage errors and symlinked dump directories fail without
+    /// changing existing directory permissions or choosing another destination.
+    /// Private exports currently require Unix. This is not an execution sandbox.
+    pub fn dump_transcript(&self) -> Result<PathBuf> {
+        let dumped_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock predates Unix epoch")?
+            .as_millis();
+        let snapshot = json!({
+            "version": 1,
+            "scope": "current-root-context",
+            "protocol": "anthropic-messages",
+            "workspace": self.workspace.display().to_string(),
+            "dumped_at_ms": dumped_at_ms,
+            "request": self.agent.transcript_snapshot(),
+        });
+        let mut contents =
+            serde_json::to_vec_pretty(&snapshot).context("could not serialize the transcript")?;
+        contents.push(b'\n');
+        transcript::write(&self.workspace, &contents).context("could not write the transcript")
     }
 
     #[cfg(all(unix, any(test, feature = "test-support")))]

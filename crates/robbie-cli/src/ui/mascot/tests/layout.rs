@@ -81,7 +81,7 @@ fn both_renderers_leave_bottom_rule_transcript_draft_and_cursor_intact() {
         ] {
             let app = App {
                 mascot: mascot(images),
-                input,
+                input: input.into(),
                 ..App::default()
             };
             let height = app.live_height(width, 24);
@@ -116,7 +116,7 @@ fn both_renderers_leave_bottom_rule_transcript_draft_and_cursor_intact() {
                 }
             }
             assert!(occupied > 0);
-            let rows = crate::ui::footer::draft_rows(&app.input, input_width as usize);
+            let rows = crate::ui::draft::rows(&app.input, input_width as usize);
             let typing_rows = if images { rows.len().min(4) } else { 6 };
             let visible = &rows[rows.len().saturating_sub(typing_rows)..];
             for (offset, text) in visible.iter().enumerate() {

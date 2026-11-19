@@ -1,4 +1,5 @@
 /target
+/.robbie/
 .env
 /.agents/docs/
 /docs/temp/

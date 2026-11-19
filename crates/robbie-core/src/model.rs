@@ -216,6 +216,43 @@ impl ModelClient {
         self.protocol.estimate_message_tokens(message)
     }
 
+    // Only the protocol owns assistant continuation. Export the same body as an
+    // ordinary request, before provider preparation can attach routing/auth.
+    pub(crate) fn transcript_snapshot(
+        &self,
+        system: &str,
+        summary: Option<&str>,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> Value {
+        self.encode_conversation(system, summary, messages, tools)
+            .body
+    }
+
+    fn encode_conversation(
+        &self,
+        system: &str,
+        summary: Option<&str>,
+        messages: &[Message],
+        tools: &[Value],
+    ) -> EncodedRequest {
+        let mut encoded = match summary {
+            Some(summary) => self.protocol.encode_with_summary(
+                &self.model,
+                system,
+                summary,
+                messages,
+                tools,
+                self.prompt_cache,
+            ),
+            None => self
+                .protocol
+                .encode(&self.model, system, messages, tools, self.prompt_cache),
+        };
+        encoded.body["max_tokens"] = serde_json::json!(self.ordinary_output_tokens());
+        encoded
+    }
+
     pub async fn complete_with_summary(
         &self,
         origin: impl Into<RequestOrigin>,
@@ -224,15 +261,7 @@ impl ModelClient {
         messages: &[Message],
         tools: &[Value],
     ) -> Result<Completion> {
-        let mut encoded = self.protocol.encode_with_summary(
-            &self.model,
-            system,
-            summary,
-            messages,
-            tools,
-            self.prompt_cache,
-        );
-        encoded.body["max_tokens"] = serde_json::json!(self.ordinary_output_tokens());
+        let encoded = self.encode_conversation(system, Some(summary), messages, tools);
         Ok(self
             .complete_encoded(origin, encoded, Policy::default())
             .await?
@@ -258,10 +287,7 @@ impl ModelClient {
         tools: &[Value],
         policy: Policy,
     ) -> Result<Completion> {
-        let mut encoded =
-            self.protocol
-                .encode(&self.model, system, messages, tools, self.prompt_cache);
-        encoded.body["max_tokens"] = serde_json::json!(self.ordinary_output_tokens());
+        let encoded = self.encode_conversation(system, None, messages, tools);
         let CompletionWithMetadata {
             completion,
             metadata: _metadata,

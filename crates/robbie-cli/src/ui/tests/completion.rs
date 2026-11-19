@@ -16,7 +16,7 @@ fn typing_slash_opens_suggestions_and_tab_only_fills_the_selected_command() {
     let mut app = App::default();
     let base = app.live_height(100, 30);
     assert_eq!(key(&mut app, KeyCode::Char('/')), InputAction::None);
-    assert_eq!(app.live_height(100, 30), base + 5);
+    assert_eq!(app.live_height(100, 30), base + 6);
     key(&mut app, KeyCode::Down);
     assert_eq!(key(&mut app, KeyCode::Tab), InputAction::None);
     assert_eq!(app.input, "/compact");
@@ -51,6 +51,12 @@ fn aliases_complete_and_submit_as_the_alias_typed() {
         assert_eq!(key(&mut app, KeyCode::Tab), InputAction::None);
         assert_eq!(app.input, expected);
     }
+    for (prefix, expected) in [("/tr", "/transcript"), ("/du", "/dump")] {
+        let mut app = App::default();
+        paste(&mut app, prefix);
+        assert_eq!(key(&mut app, KeyCode::Tab), InputAction::None);
+        assert_eq!(app.input, expected);
+    }
     let mut app = App::default();
     paste(&mut app, "/quit");
     assert_eq!(key(&mut app, KeyCode::Enter), InputAction::Submit);
@@ -61,7 +67,7 @@ fn aliases_complete_and_submit_as_the_alias_typed() {
 fn up_and_down_wrap_and_editing_resets_the_selection_before_filtering() {
     for (arrows, expected) in [
         (vec![KeyCode::Up], "/exit"),
-        (vec![KeyCode::Down, KeyCode::Down], "/exit"),
+        (vec![KeyCode::Down, KeyCode::Down], "/transcript"),
         (vec![KeyCode::Down, KeyCode::Up], "/help"),
     ] {
         let mut app = App::default();
@@ -114,6 +120,7 @@ fn suggestions_are_case_sensitive_and_only_for_the_first_command_token() {
         "/tmp/file",
         "/help ",
         "/compact extra",
+        "/transcript extra",
         "/ co",
     ] {
         let mut app = App::default();
@@ -174,4 +181,17 @@ fn control_shortcuts_alt_keys_and_key_releases_do_not_select_or_accept_suggestio
         ))),
         InputAction::Quit
     );
+}
+
+#[test]
+fn completing_a_command_moves_the_cursor_after_the_command() {
+    let mut app = App::default();
+    paste(&mut app, "/co");
+    key(&mut app, KeyCode::Left);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(key(&mut app, KeyCode::Tab), InputAction::None);
+    assert_eq!(app.input, "/compact");
+    assert_eq!(app.input.cursor(), app.input.len());
+    assert_eq!(key(&mut app, KeyCode::Enter), InputAction::Submit);
+    assert_eq!(app.submit(), Some(Submission::Compact));
 }

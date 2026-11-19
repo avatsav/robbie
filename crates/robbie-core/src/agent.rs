@@ -383,7 +383,16 @@ impl Agent {
         }
     }
 
-    // Fixture-only access; production callers cannot mutate agent state.
+    pub(crate) fn transcript_snapshot(&self) -> serde_json::Value {
+        self.model.transcript_snapshot(
+            &self.system_prompt(),
+            self.previous_summary.as_deref(),
+            &self.messages,
+            &self.tools.schemas(),
+        )
+    }
+
+    // Fixture-only access; production callers cannot inspect/mutate raw history.
     #[cfg(test)]
     pub(crate) fn history(&self) -> &[Message] {
         &self.messages

@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{
     MUTED_CYAN, MUTED_TEXT,
     commands::{COMMANDS, Definition},
+    draft::Draft,
     single_line,
 };
 
@@ -48,7 +49,7 @@ impl Completion {
 
     // true consumes the key locally. A complete command's Enter is deliberately
     // left to ordinary submission; accepting a partial suggestion never submits.
-    pub(super) fn handle_key(&mut self, input: &mut String, key: KeyCode) -> bool {
+    pub(super) fn handle_key(&mut self, input: &mut Draft, key: KeyCode) -> bool {
         let candidates = self.candidates(input);
         if candidates.is_empty() {
             return false;
@@ -61,8 +62,7 @@ impl Completion {
             KeyCode::Enter if input.trim_start() == candidates[selected].0 => return false,
             KeyCode::Tab | KeyCode::Enter => {
                 let leading = input.len() - input.trim_start().len();
-                input.truncate(leading);
-                input.push_str(candidates[selected].0);
+                input.complete(leading, candidates[selected].0);
                 self.dismissed = true;
             }
             _ => return false,

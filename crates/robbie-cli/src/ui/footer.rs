@@ -7,7 +7,9 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{App, MUTED_CYAN, MUTED_RED, MUTED_TEXT, mascot, single_line, workspace::Workspace};
+use super::{
+    App, MUTED_CYAN, MUTED_RED, MUTED_TEXT, draft, mascot, single_line, workspace::Workspace,
+};
 
 const IDLE_RULE: Color = Color::Rgb(166, 118, 165);
 const MAX_INPUT_ROWS: usize = 4;
@@ -26,7 +28,7 @@ impl App {
         let overlap = self.mascot.top_rule_overlap();
         let draft_width = width.saturating_sub(size.width + mascot::GUTTER);
         let minimum_rows = size.height.saturating_sub(overlap * 2);
-        let input_height = (draft_rows(&self.input, draft_width as usize)
+        let input_height = (draft::rows(&self.input, draft_width as usize)
             .len()
             .min(MAX_INPUT_ROWS) as u16)
             .max(minimum_rows);
@@ -45,7 +47,7 @@ impl App {
         {
             input_height + headroom + 4
         } else {
-            draft_rows(&self.input, width as usize)
+            draft::rows(&self.input, width as usize)
                 .len()
                 .min(MAX_INPUT_ROWS) as u16
                 + 4
@@ -162,19 +164,23 @@ impl App {
         } else {
             area.width
         };
-        let rows = draft_rows(&self.input, input_width as usize);
-        let visible = &rows[rows.len().saturating_sub(input_height as usize)..];
-        for (offset, text) in visible.iter().enumerate() {
+        self.draft_width.set(input_width as usize);
+        let layout = draft::layout(&self.input, self.input.cursor(), input_width as usize);
+        let rows = &layout.rows;
+        let height = input_height as usize;
+        // Scroll just enough to keep the caret's wrapped row on screen.
+        let first = layout.cursor_row.saturating_sub(height.saturating_sub(1));
+        for (offset, text) in rows.iter().skip(first).take(height).enumerate() {
             frame.render_widget(
                 Line::from(text.as_str()),
                 Rect::new(area.x, input_y + offset as u16, input_width, 1),
             );
         }
-        let cursor_column = visible.last().map(|row| row.width()).unwrap_or(0) as u16;
-        frame.set_cursor_position((
-            area.x + cursor_column.min(input_width - 1),
-            input_y + visible.len().saturating_sub(1) as u16,
-        ));
+        let cursor_column = layout
+            .cursor_column
+            .min((input_width as usize).saturating_sub(1)) as u16;
+        let cursor_row = layout.cursor_row.saturating_sub(first) as u16;
+        frame.set_cursor_position((area.x + cursor_column, input_y + cursor_row));
         if let Some(y) = footer_y {
             let branch = self
                 .workspace
@@ -217,36 +223,6 @@ fn rule(title: &str, width: u16, color: Color) -> Line<'static> {
     };
     let remaining = width as usize - title.width();
     Line::from(format!("{title}{}", "─".repeat(remaining))).fg(color)
-}
-
-// Preserve the draft verbatim, wrapping by cells without splitting graphemes.
-// A full final row gets a new empty row so the cursor always has a real cell.
-pub(super) fn draft_rows(input: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![String::new()];
-    }
-    let mut rows = vec![String::new()];
-    let mut column = 0;
-    for grapheme in input.graphemes(true) {
-        let glyph = if grapheme.width() > width {
-            "�"
-        } else {
-            grapheme
-        };
-        let cells = glyph.width();
-        if column + cells > width {
-            rows.push(String::new());
-            column = 0;
-        }
-        let last = rows.len() - 1;
-        rows[last].push_str(glyph);
-        column += cells;
-        if column == width {
-            rows.push(String::new());
-            column = 0;
-        }
-    }
-    rows
 }
 
 fn tail_ellipsis(text: &str, width: usize) -> String {
@@ -381,12 +357,12 @@ mod tests {
 
     #[test]
     fn draft_wraps_graphemes_and_reserves_cursor_at_exact_boundary() {
-        assert_eq!(draft_rows("abcd", 4), ["abcd", ""]);
-        assert_eq!(draft_rows("a猫e\u{301}", 3), ["a猫", "e\u{301}"]);
-        assert_eq!(draft_rows("👩‍💻a", 1), ["�", "a", ""]);
+        assert_eq!(draft::rows("abcd", 4), ["abcd", ""]);
+        assert_eq!(draft::rows("a猫e\u{301}", 3), ["a猫", "e\u{301}"]);
+        assert_eq!(draft::rows("👩‍💻a", 1), ["�", "a", ""]);
         for width in 0..12 {
             assert!(
-                draft_rows("abc猫👩‍💻e\u{301}", width)
+                draft::rows("abc猫👩‍💻e\u{301}", width)
                     .iter()
                     .all(|row| row.width() <= width)
             );
@@ -396,7 +372,7 @@ mod tests {
     #[test]
     fn long_input_keeps_cursor_inside_small_or_offset_viewports() {
         let app = App {
-            input: "猫 abc e\u{301} ".repeat(100),
+            input: "猫 abc e\u{301} ".repeat(100).into(),
             ..App::default()
         };
         assert_eq!(app.live_height(20, 24), 8);

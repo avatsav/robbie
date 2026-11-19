@@ -21,13 +21,15 @@ fn help_has_lowercase_headings_and_one_shared_description_column() {
     let app = app_with_help();
     let rows = rows(&app, 100);
     assert_eq!(rows[2].to_string(), "commands");
-    assert_eq!(rows[8].to_string(), "shortcuts");
-    for heading in [&rows[2], &rows[8]] {
+    assert_eq!(rows[10].to_string(), "shortcuts");
+    for heading in [&rows[2], &rows[10]] {
         assert!(heading.style.add_modifier.contains(Modifier::BOLD));
     }
     for (label, description) in [
         ("/help", "show this help"),
         ("/compact", "compact context"),
+        ("/transcript", "write sensitive model context"),
+        ("/dump", "alias for /transcript"),
         ("/exit", "exit Robbie"),
         ("/quit", "alias for /exit"),
         ("enter", "submit prompt"),
@@ -55,7 +57,7 @@ fn command_and_shortcut_labels_are_cyan_and_the_alias_row_is_muted() {
     assert_eq!(buffer[(16, 3)].fg, Color::Reset);
     assert_eq!(buffer[(2, 6)].fg, MUTED_CYAN);
     assert_eq!(buffer[(16, 6)].fg, MUTED_TEXT);
-    assert_eq!(buffer[(2, 9)].fg, Color::Rgb(0, 184, 190));
+    assert_eq!(buffer[(2, 11)].fg, Color::Rgb(0, 184, 190));
     assert!(
         !buffer
             .content
@@ -156,6 +158,7 @@ fn help_lists_only_implemented_commands_and_shortcuts() {
     for shortcut in [
         "enter",
         "tab",
+        "← / →",
         "↑ / ↓",
         "esc",
         "ctrl-c",

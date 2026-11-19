@@ -70,6 +70,16 @@ fn exit_is_local_and_starts_no_work() {
 }
 
 #[test]
+fn transcript_is_local_dispatch_not_a_model_prompt() {
+    let mut app = App::default();
+    app.handle_event(Event::Paste("  /transcript  ".into()));
+    assert_eq!(app.submit(), Some(Submission::Transcript));
+    assert!(app.input.is_empty());
+    assert!(!app.working, "the host writes the dump after dispatch");
+    assert_eq!(app.pending[0].text(), "  /transcript  ");
+}
+
+#[test]
 fn compact_is_typed_session_work_not_a_model_prompt() {
     let mut app = App::default();
     app.handle_event(Event::Paste("  /compact  ".into()));

@@ -6,6 +6,8 @@ mod automatic;
 mod compaction;
 #[path = "session/limits.rs"]
 mod limits;
+#[path = "session/transcript.rs"]
+mod transcript;
 #[path = "session/usage.rs"]
 mod usage;
 
@@ -22,6 +24,7 @@ async fn public_session_runs_real_tools_and_correlates_frontend_observations() {
     std::fs::create_dir(&workspace).unwrap();
     std::fs::write(workspace.join("example.txt"), "public consumer fixture").unwrap();
     let state = root.path().join("state");
+    let workspace_display = workspace.display().to_string();
     let server = Server::new(vec![
         Reply::Http(
             200,
@@ -103,4 +106,68 @@ async fn public_session_runs_real_tools_and_correlates_frontend_observations() {
         assert_eq!(received[field], appended[field]);
     }
     assert!(records.iter().all(|record| record.get("content").is_none()));
+
+    // The explicit transcript export is independent of metadata-only recording.
+    let transcript = session.dump_transcript().unwrap();
+    assert!(
+        transcript
+            .parent()
+            .unwrap()
+            .ends_with(".robbie/transcripts")
+    );
+    assert_eq!(transcript.extension().unwrap(), "json");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&transcript).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let dump: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&transcript).unwrap()).unwrap();
+    assert_eq!(dump["request"]["model"], "fixture/model");
+    assert_eq!(dump["workspace"], workspace_display);
+    let messages = dump["request"]["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "read the fixture");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["name"], "read_file");
+    assert_eq!(messages[1]["content"][0]["input"]["path"], "example.txt");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert_eq!(
+        messages[2]["content"][0]["content"],
+        "public consumer fixture"
+    );
+    assert_eq!(messages[3]["content"][0]["text"], "done");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transcript_dump_is_independent_of_diagnostics_storage() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let server = Server::new(vec![]);
+    let (session, _, _) = server
+        .session(SessionConfig {
+            skills_directory: workspace.join("skills"),
+            workspace,
+            model: ModelSettings {
+                api_key: "fixture-secret".into(),
+                model: "fixture/model".into(),
+                upstream: None,
+                prompt_cache: PromptCache::Off,
+            },
+            recording: RecordingSettings {
+                state_directory: None,
+                capture: CapturePolicy::MetadataOnly,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(session.recording().description().is_none());
+    let path = session.dump_transcript().unwrap();
+    assert_eq!(
+        path.parent().unwrap(),
+        std::fs::canonicalize(root.path().join("workspace/.robbie/transcripts")).unwrap()
+    );
+    assert_eq!(server.count(), 0);
 }
